@@ -1,4 +1,4 @@
-name: Apply Supabase Schema (CLI)
+name: Apply Supabase Schema
 
 on:
   push:
@@ -17,8 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+      SUPABASE_PROJECT_ID:  ${{ secrets.SUPABASE_PROJECT_ID }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      DATABASE_URL:         ${{ secrets.DATABASE_URL }} # опційно, тільки для seed
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,16 +31,22 @@ jobs:
 
       - name: Link project (non-interactive)
         run: |
+          set -e
+          supabase login "$SUPABASE_ACCESS_TOKEN"
+          # ВАЖЛИВО: без --no-open (цей прапор застарів)
           supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
       - name: Push migrations (and seed if present)
         run: |
-          if [ -f "supabase/seed.sql" ]; then
-            supabase db push --linked -p "$SUPABASE_DB_PASSWORD" --include-seed
-          else
-            supabase db push --linked -p "$SUPABASE_DB_PASSWORD"
-          fi
+          set -e
+          # застосувати всі міграції до віддаленого проєкту
+          supabase db push -p "$SUPABASE_DB_PASSWORD"
 
-      - name: Show migration status (optional)
-        run: |
-          supabase db pull --linked -p "$SUPABASE_DB_PASSWORD" --dry-run || true
+          # якщо є seed і є DATABASE_URL — виконуємо
+          if [ -n "${DATABASE_URL:-}" ] && [ -f "supabase/seed.sql" ]; then
+            echo "Running seed via psql…"
+            sudo apt-get update && sudo apt-get install -y postgresql-client
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/seed.sql
+          else
+            echo "Seed skipped (no DATABASE_URL or no supabase/seed.sql)"
+          fi
