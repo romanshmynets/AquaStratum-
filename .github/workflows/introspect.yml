@@ -23,6 +23,7 @@ concurrency:
 jobs:
   introspect:
     runs-on: ubuntu-latest
+
     env:
       SUPABASE_ACCESS_TOKEN:     ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_PROJECT_ID:       ${{ secrets.SUPABASE_PROJECT_ID }}
@@ -35,8 +36,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
       - name: Mark repo as safe
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -50,12 +50,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq graphviz curl
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin v1.16.0
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sudo sh -s -- -b /usr/local/bin v1.16.0
 
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
-        with:
-          version: latest
+        with: { version: latest }
 
       - name: Dump DB schema via Supabase CLI
         id: dump
@@ -76,27 +76,25 @@ jobs:
           set -euo pipefail
           INV="${OUT_DIR}/rpc"; mkdir -p "$INV"
 
-          # ВАЖЛИВО: для RPC (POST) використовуємо Content-Profile: introspect
-          hdr=(-H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" \
-               -H "Content-Profile: introspect" -H "Accept-Profile: introspect" \
-               -H "Content-Type: application/json")
+          # ВАЖЛИВО: Content-Profile/Accept-Profile = introspect (схема функцій)
+          H1="-H apikey: ${KEY}"
+          H2="-H Authorization: Bearer ${KEY}"
+          H3="-H Accept: application/json"
+          H4="-H Content-Type: application/json"
+          H5="-H Content-Profile: introspect"
+          H6="-H Accept-Profile: introspect"
 
-          # тягнемо всі RPC і падаємо на не-2xx
-          curl -sSf "${URL}/rest/v1/rpc/tables"  "${hdr[@]}" -d '{}' > "${INV}/tables.json"
-          curl -sSf "${URL}/rest/v1/rpc/columns" "${hdr[@]}" -d '{}' > "${INV}/columns.json"
-          curl -sSf "${URL}/rest/v1/rpc/pks"     "${hdr[@]}" -d '{}' > "${INV}/pks.json"
-          curl -sSf "${URL}/rest/v1/rpc/fks"     "${hdr[@]}" -d '{}' > "${INV}/fks.json"
-          curl -sSf "${URL}/rest/v1/rpc/indexes" "${hdr[@]}" -d '{}' > "${INV}/indexes.json"
-          curl -sSf "${URL}/rest/v1/rpc/views"   "${hdr[@]}" -d '{}' > "${INV}/views.json"
+          curl -sSf "${URL}/rest/v1/rpc/tables"  $H1 $H2 $H3 $H4 $H5 $H6 -d '{}' > "${INV}/tables.json"
+          curl -sSf "${URL}/rest/v1/rpc/columns" $H1 $H2 $H3 $H4 $H5 $H6 -d '{}' > "${INV}/columns.json"
+          curl -sSf "${URL}/rest/v1/rpc/pks"     $H1 $H2 $H3 $H4 $H5 $H6 -d '{}' > "${INV}/pks.json"
+          curl -sSf "${URL}/rest/v1/rpc/fks"     $H1 $H2 $H3 $H4 $H5 $H6 -d '{}' > "${INV}/fks.json"
+          curl -sSf "${URL}/rest/v1/rpc/indexes" $H1 $H2 $H3 $H4 $H5 $H6 -d '{}' > "${INV}/indexes.json"
+          curl -sSf "${URL}/rest/v1/rpc/views"   $H1 $H2 $H3 $H4 $H5 $H6 -d '{}' > "${INV}/views.json"
 
-          # Перевіряємо, що tables.json — масив; інакше зберігаємо помилку та завершуємо крок
-          if ! jq -e 'type=="array"' "${INV}/tables.json" > /dev/null; then
-            echo "RPC returned non-array for tables:" | tee "${INV}/rpc_error.log"
-            cat "${INV}/tables.json" | tee -a "${INV}/rpc_error.log"
-            exit 5
-          fi
+          # Перевірка, що повернувся масив таблиць
+          jq -e 'type=="array"' "${INV}/tables.json" > /dev/null
 
-          # summary з точною кількістю і повним списком таблиць
+          # summary з підрахунком і повним списком
           jq '{table_count: length, tables: [ .[] | (.schema_name + "." + .table_name) ]}' \
              "${INV}/tables.json" > "${INV}/summary.json"
 
@@ -108,22 +106,26 @@ jobs:
           set -euo pipefail
           DATA_DIR="${OUT_DIR}/db_data"; mkdir -p "${DATA_DIR}"
           BATCH=${DATA_BATCH:-5000}; MAX=${DATA_MAX_ROWS:-200000}
-          jq -r '.[] | "\(.schema_name) \(.table_name)"' "${OUT_DIR}/rpc/tables.json" | while read SCHEMA NAME; do
-            SAFE_SCHEMA="$(echo "$SCHEMA" | tr -cd '[:alnum:]_')"
-            SAFE_TABLE="$(echo "$NAME"   | tr -cd '[:alnum:]_')"
-            DEST_DIR="${DATA_DIR}/${SAFE_SCHEMA}"; mkdir -p "${DEST_DIR}"
-            DEST="${DEST_DIR}/${SAFE_TABLE}.jsonl"; : > "${DEST}"
-            offset=0
-            while [ $offset -lt $MAX ]; do
-              RESP="$(curl -sS "${URL}/rest/v1/${SAFE_TABLE}?select=*&limit=${BATCH}&offset=${offset}" \
-                       -H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" -H "Accept-Profile: ${SCHEMA}")"
-              count="$(echo "$RESP" | jq 'length')"
-              [ "$count" = "0" ] && break
-              echo "$RESP" | jq -c '.[]' >> "${DEST}"
-              offset=$((offset + BATCH))
-              [ "$count" -lt "$BATCH" ] && break
-            done
-          done
+
+          jq -r '.[] | "\(.schema_name) \(.table_name)"' "${OUT_DIR}/rpc/tables.json" \
+            | while read SCHEMA NAME; do
+                SAFE_SCHEMA="$(echo "$SCHEMA" | tr -cd '[:alnum:]_')"
+                SAFE_TABLE="$(echo "$NAME"   | tr -cd '[:alnum:]_')"
+                DEST_DIR="${DATA_DIR}/${SAFE_SCHEMA}"; mkdir -p "${DEST_DIR}"
+                DEST="${DEST_DIR}/${SAFE_TABLE}.jsonl"; : > "${DEST}"
+
+                off=0
+                while [ $off -lt $MAX ]; do
+                  RESP="$(curl -sS "${URL}/rest/v1/${SAFE_TABLE}?select=*&limit=${BATCH}&offset=${off}" \
+                               -H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" \
+                               -H "Accept-Profile: ${SCHEMA}")"
+                  cnt="$(echo "$RESP" | jq 'length')"
+                  [ "$cnt" = "0" ] && break
+                  echo "$RESP" | jq -c '.[]' >> "${DEST}"
+                  off=$((off + BATCH))
+                  [ "$cnt" -lt "$BATCH" ] && break
+                done
+              done
 
       - name: ERD (from FK)
         run: |
@@ -160,8 +162,7 @@ jobs:
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
+        with: { path: public }
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
