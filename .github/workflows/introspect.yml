@@ -3,12 +3,6 @@ name: Project Introspection
 on:
   push:
     branches: [ "main" ]
-    paths-ignore:
-      - "snapshots/**"
-      - "state/**"
-      - "sbom/**"
-      - "db_inventory/**"
-      - "public/**"
   workflow_dispatch:
 
 permissions:
@@ -34,22 +28,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Mark repo as safe
-        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
-
-      - name: Git identity
-        run: |
-          git config user.name "introspect-bot"
-          git config user.email "introspect-bot@users.noreply.github.com"
-
-      - name: Install tooling
+      - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y jq curl
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin v1.16.0
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sudo sh -s -- -b /usr/local/bin v1.16.0
 
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
@@ -61,9 +46,7 @@ jobs:
         run: |
           set -e
           TS="$(date -u +%Y%m%dT%H%M%SZ)"
-          echo "TS=${TS}" >> "$GITHUB_ENV"
           SHA="$(git rev-parse --short HEAD)"
-          echo "SHA=${SHA}" >> "$GITHUB_ENV"
           OUT="state/${TS}_${SHA}/db"
           mkdir -p "${OUT}"
           echo "OUT_DIR=${OUT}" >> "$GITHUB_ENV"
@@ -72,7 +55,7 @@ jobs:
           supabase link --project-ref "$SUPABASE_PROJECT_ID"
           supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" -f "${OUT}/schema.sql"
 
-      - name: RPC - fetch tables/columns/pks/fks/indexes/views
+      - name: RPC fetch
         env:
           URL: ${{ secrets.SUPABASE_URL }}
           KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -81,31 +64,41 @@ jobs:
           INV="${OUT_DIR}/rpc"
           mkdir -p "$INV"
 
-          HEADER_APIKEY="apikey: ${KEY}"
-          HEADER_AUTH="Authorization: Bearer ${KEY}"
-          HEADER_ACCEPT="Accept: application/json"
-          HEADER_CT="Content-Type: application/json"
-          HEADER_PROFILE="Content-Profile: introspect"
-
           for FN in tables columns pks fks indexes views; do
             echo "Fetching ${FN}..."
             curl -sSf "${URL}/rest/v1/rpc/${FN}" \
-              -H "${HEADER_APIKEY}" \
-              -H "${HEADER_AUTH}" \
-              -H "${HEADER_ACCEPT}" \
-              -H "${HEADER_CT}" \
-              -H "${HEADER_PROFILE}" \
+              -H "apikey: ${KEY}" \
+              -H "Authorization: Bearer ${KEY}" \
+              -H "Accept: application/json" \
+              -H "Content-Type: application/json" \
+              -H "Content-Profile: introspect" \
               -d '{}' > "${INV}/${FN}.json"
           done
 
           jq '{table_count: length, tables: [ .[] | (.schema_name + "." + .table_name) ]}' \
             "${INV}/tables.json" > "${INV}/summary.json"
 
-      - name: Publish inventory to repo root & Pages
+      - name: Publish inventory
         run: |
           mkdir -p db_inventory public/api/db
           cp "${OUT_DIR}/rpc/"*.json db_inventory/ || true
           cp db_inventory/*.json public/api/db/ || true
+
+      - name: Commit & Push
+        run: |
+          git config user.name "introspect-bot"
+          git config user.email "introspect-bot@users.noreply.github.com"
+          git add state/ db_inventory/ public/
+          git commit -m "chore(introspect): update schema snapshot" || true
+          git push origin HEAD:main
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4          cp db_inventory/*.json public/api/db/ || true
 
       - name: Commit & Push results
         run: |
