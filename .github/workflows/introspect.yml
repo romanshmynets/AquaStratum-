@@ -1,0 +1,72 @@
+name: Project Introspection
+
+on:
+  push:
+    branches: [ "main" ]
+    paths-ignore:
+      - 'snapshots/**'
+      - 'state/**'
+      - 'sbom/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  introspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Git identity
+        run: |
+          git config user.name "introspect-bot"
+          git config user.email "introspect-bot@users.noreply.github.com"
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tree ripgrep universal-ctags postgresql-client
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin v1.16.0
+
+      - name: Export DATABASE_URL (if secret is set)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -n "${DATABASE_URL}" ]; then
+            echo "DATABASE_URL=${DATABASE_URL}" >> $GITHUB_ENV
+          else
+            echo "No DATABASE_URL provided; skipping live DB introspection."
+          fi
+
+      - name: Collect project state
+        run: |
+          chmod +x scripts/collect_state.sh
+          ./scripts/collect_state.sh
+
+      - name: Generate SBOM (syft)
+        run: |
+          mkdir -p sbom
+          syft packages dir:. -o json > sbom/packages.json || true
+          syft dir:. -o spdx-json > sbom/spdx.json || true
+
+      - name: Commit state & SBOM
+        run: |
+          git add state/ sbom/
+          if git diff --cached --quiet; then
+            echo "No state changes."
+            exit 0
+          fi
+          git commit -m "chore(introspect): state+SBOM for $GITHUB_SHA [skip ci]"
+          git push origin HEAD:${GITHUB_REF_NAME}
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-introspection-${{ github.run_number }}
+          path: |
+            state/**
+            sbom/**
