@@ -57,8 +57,8 @@ jobs:
       - name: Generate SBOM (syft)
         run: |
           mkdir -p sbom
-          syft packages dir:. -o json > sbom/packages.json || true
-          syft dir:. -o spdx-json > sbom/spdx.json || true
+          syft scan dir:. -o json > sbom/packages.json || true
+          syft scan dir:. -o spdx-json > sbom/spdx.json || true
 
       - name: Commit state & SBOM
         run: |
@@ -68,8 +68,10 @@ jobs:
             exit 0
           fi
           git commit -m "chore(introspect): state+SBOM for $GITHUB_SHA [skip ci]"
-          # --- handle remote updates and avoid non-fast-forward ---
+          # --- allow rebase even if local changes exist ---
+          git stash push -u -m "temp-introspect" || true
           git pull --rebase origin "${GITHUB_REF_NAME}" || true
+          git stash pop || true
           git push origin HEAD:"${GITHUB_REF_NAME}"
 
       - name: Upload artifacts
