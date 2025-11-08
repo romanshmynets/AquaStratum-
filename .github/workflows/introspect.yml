@@ -19,10 +19,10 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      SUPABASE_ACCESS_TOKEN:     ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_PROJECT_ID:       ${{ secrets.SUPABASE_PROJECT_ID }}
-      SUPABASE_DB_PASSWORD:      ${{ secrets.SUPABASE_DB_PASSWORD }}
-      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
     steps:
@@ -55,7 +55,7 @@ jobs:
           supabase link --project-ref "$SUPABASE_PROJECT_ID"
           supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" -f "${OUT}/schema.sql"
 
-      - name: RPC fetch
+      - name: RPC fetch (tables, columns, etc.)
         env:
           URL: ${{ secrets.SUPABASE_URL }}
           KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -71,7 +71,7 @@ jobs:
               -H "Authorization: Bearer ${KEY}" \
               -H "Accept: application/json" \
               -H "Content-Type: application/json" \
-              -H "Content-Profile: introspect" \
+              -H "Accept-Profile: introspect" \
               -d '{}' > "${INV}/${FN}.json"
           done
 
@@ -98,52 +98,7 @@ jobs:
           path: public
 
       - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4          cp db_inventory/*.json public/api/db/ || true
-
-      - name: Commit & Push results
-        run: |
-          git add state/ db_inventory/ public/
-          git commit -m "chore(introspect): rpc inventory for $GITHUB_SHA [skip ci]" || true
-          git push origin HEAD:"${GITHUB_REF_NAME}"
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4        env:
-          URL: ${{ secrets.SUPABASE_URL }}
-          KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: |
-          set -euo pipefail
-          DATA_DIR="${OUT_DIR}/db_data"
-          mkdir -p "${DATA_DIR}"
-          BATCH=${DATA_BATCH:-5000}
-          MAX=${DATA_MAX_ROWS:-200000}
-
-          jq -r '.[] | "\(.schema_name) \(.table_name)"' "${OUT_DIR}/rpc/tables.json" \
-            | while read SCHEMA NAME; do
-                SAFE_SCHEMA="$(echo "$SCHEMA" | tr -cd '[:alnum:]_')"
-                SAFE_TABLE="$(echo "$NAME"   | tr -cd '[:alnum:]_')"
-                DEST_DIR="${DATA_DIR}/${SAFE_SCHEMA}"
-                mkdir -p "${DEST_DIR}"
-                DEST="${DEST_DIR}/${SAFE_TABLE}.jsonl"
-                : > "${DEST}"
-
-                off=0
-                while [ $off -lt $MAX ]; do
-                  RESP="$(curl -sS "${URL}/rest/v1/${SAFE_TABLE}?select=*&limit=${BATCH}&offset=${off}" \
-                               -H "apikey: ${KEY}" \
-                               -H "Authorization: Bearer ${KEY}" \
-                               -H "Accept-Profile: ${SCHEMA}")"
-                  cnt="$(echo "$RESP" | jq 'length')"
-                  [ "$cnt" = "0" ] && break
-                  echo "$RESP" | jq -c '.[]' >> "${DEST}"
-                  off=$((off + BATCH))
-                  [ "$cnt" -lt "$BATCH" ] && break
-                done
-              done
+        uses: actions/deploy-pages@v4              done
 
       - name: ERD (from FK)
         run: |
