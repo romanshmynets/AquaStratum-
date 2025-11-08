@@ -60,15 +60,21 @@ jobs:
           syft scan dir:. -o json > sbom/packages.json || true
           syft scan dir:. -o spdx-json > sbom/spdx.json || true
 
-      - name: Commit state & SBOM
+      # >>> NEW: also create a repo snapshot inside this workflow <<<
+      - name: Make snapshot
         run: |
-          git add state/ sbom/
+          chmod +x scripts/make_snapshot.sh
+          ./scripts/make_snapshot.sh
+
+      - name: Commit state, SBOM & snapshot
+        run: |
+          git add state/ sbom/ snapshots/
           if git diff --cached --quiet; then
-            echo "No state changes."
+            echo "No changes to commit."
             exit 0
           fi
-          git commit -m "chore(introspect): state+SBOM for $GITHUB_SHA [skip ci]"
-          # --- allow rebase even if local changes exist ---
+          git commit -m "chore(introspect): state+SBOM+snapshot for $GITHUB_SHA [skip ci]"
+          # avoid non-fast-forward and unstaged-changes issues
           git stash push -u -m "temp-introspect" || true
           git pull --rebase origin "${GITHUB_REF_NAME}" || true
           git stash pop || true
@@ -82,3 +88,4 @@ jobs:
           path: |
             state/**
             sbom/**
+            snapshots/*.md
