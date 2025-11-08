@@ -1,0 +1,14 @@
+state/20251108T033651Z_d859bc4/files/tracked.txt
+state/20251108T033651Z_d859bc4/files/tree.txt
+state/20251108T033651Z_d859bc4/STATE.md
+state/20251108T033651Z_d859bc4/index/tags
+state/20251108T033651Z_d859bc4/index/rg-files.txt
+state/20251108T033651Z_d859bc4/env/guessed.env.example
+snapshots/20251108T031133Z_b3c79f2.md
+snapshots/20251108T031231Z_387dc0f.md
+snapshots/20251108T033112Z_b2f690f.md
+snapshots/20251108T033013Z_9aad5fb.md
+README.md
+scripts/make_snapshot.sh
+scripts/collect_state.sh
+LICENSE
