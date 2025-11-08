@@ -30,7 +30,6 @@ FUN_JSON="${OUT_DIR}/FUNCTIONS.json"
 # --- TABLES + COLUMNS + PK ---
 awk '
 BEGIN{ IGNORECASE=1 }
-# Capture CREATE TABLE and columns until closing parenthesis
 /^[[:space:]]*CREATE[[:space:]]+TABLE[[:space:]]/ {
   in_table=1; cols=""; pk="";
   schema="public"; table=""; line=$0;
@@ -45,21 +44,15 @@ BEGIN{ IGNORECASE=1 }
 in_table && /^\)/ { in_table=0; if (table!="") tables[current]=cols "|" pk; next }
 in_table {
   line=$0
-  # PRIMARY KEY line inside table body
   if (line ~ /PRIMARY[[:space:]]+KEY/) {
-    if (match(line, /\(([^\)]+)\)/, m)) {
-      pk=m[1]; gsub(/"/,"",pk); gsub(/[[:space:]]/,"",pk);
-    }
+    if (match(line, /\(([^\)]+)\)/, m)) { pk=m[1]; gsub(/"/,"",pk); gsub(/[[:space:]]/,"",pk); }
     next
   }
-  # column defs
   gsub(/^[[:space:]]+/,"",line); sub(/,[[:space:]]*$/,"",line);
   if (line ~ /^(CONSTRAINT|UNIQUE|CHECK|FOREIGN[[:space:]]+KEY)/i) next
   col=""
   if (match(line, /^"([^"]+)"/, c)) col=c[1]; else if (match(line, /^([A-Za-z0-9_]+)/, c2)) col=c2[1];
-  if (col!="") {
-    if (cols=="") cols=col; else cols=cols ", " col;
-  }
+  if (col!="") { if (cols=="") cols=col; else cols=cols ", " col; }
 }
 END{
   print "# Tables" > "'"${TABLES_MD}"'"
@@ -68,11 +61,9 @@ END{
   first=1
   for (t in tables) {
     split(tables[t], parts, /\|/); columns=parts[1]; pk=parts[2];
-    # MD
     printf("## %s\n\n- columns: %s\n", t, columns) >> "'"${TABLES_MD}"'"
     if (pk!="") printf("- primary key: %s\n", pk) >> "'"${TABLES_MD}"'"
     printf("\n") >> "'"${TABLES_MD}"'"
-    # JSON
     if (!first) printf(",\n") >> "'"${TABLES_JSON}"'"; first=0
     printf("  \"%s\": {\"columns\": [", t) >> "'"${TABLES_JSON}"'"
     n=split(columns, arr, /,[[:space:]]*/)
@@ -88,7 +79,6 @@ END{
 # --- INDEXES ---
 awk '
 BEGIN{ IGNORECASE=1 }
-# CREATE INDEX name ON schema.table (columns...)
 /^[[:space:]]*CREATE[[:space:]]+INDEX[[:space:]]/ {
   name=""; target=""; cols="";
   line=$0
@@ -129,9 +119,7 @@ BEGIN{ IGNORECASE=1 }
   if (match(line, /REFERENCES[[:space:]]+"?([A-Za-z0-9_]+)"?[.]"?([A-Za-z0-9_]+)"?[[:space:]]*\(([^\)]+)\)/, r)) {
     ref=r[1] "." r[2]; rcols=r[3]; gsub(/"/,"",ref); gsub(/[[:space:]]/,"",rcols)
   }
-  if (src!="" && cols!="" && ref!="" && rcols!="") {
-    fk[src "|" cols "|" ref "|" rcols]=1
-  }
+  if (src!="" && cols!="" && ref!="" && rcols!="") { fk[src "|" cols "|" ref "|" rcols]=1 }
 }
 END{
   print "# Foreign Keys" > "'"${FK_MD}"'"
@@ -139,16 +127,13 @@ END{
   print "[" > "'"${FK_JSON}"'"
   first=1
   for (k in fk) {
-    n=split(k, a, /\|/)
-    s=a[1]; sc=a[2]; r=a[3]; rc=a[4];
+    n=split(k, a, /\|/); s=a[1]; sc=a[2]; r=a[3]; rc=a[4];
     printf("- %s (%s) → %s (%s)\n\n", s, sc, r, rc) >> "'"${FK_MD}"'"
     if (!first) printf(",\n") >> "'"${FK_JSON}"'"; first=0
     printf("  {\"source\":\"%s\",\"source_cols\":[", s) >> "'"${FK_JSON}"'"
-    ns=split(sc, sca, /,/)
-    for (i=1;i<=ns;i++){ printf("%s\"%s\"", (i>1?",":""), sca[i]) >> "'"${FK_JSON}"'"}
+    ns=split(sc, sca, /,/); for (i=1;i<=ns;i++){ printf("%s\"%s\"", (i>1?",":""), sca[i]) >> "'"${FK_JSON}"'"}
     printf("],\"target\":\"%s\",\"target_cols\":[", r) >> "'"${FK_JSON}"'"
-    nr=split(rc, rca, /,/)
-    for (i=1;i<=nr;i++){ printf("%s\"%s\"", (i>1?",":""), rca[i]) >> "'"${FK_JSON}"'"}
+    nr=split(rc, rca, /,/); for (i=1;i<=nr;i++){ printf("%s\"%s\"", (i>1?",":""), rca[i]) >> "'"${FK_JSON}"'"}
     printf("]}") >> "'"${FK_JSON}"'"
   }
   print "\n]" >> "'"${FK_JSON}"'"
@@ -162,8 +147,7 @@ BEGIN{ IGNORECASE=1 }
   schema="public"; view=""; line=$0
   if (match(line, /VIEW[[:space:]]+"?([A-Za-z0-9_]+)"?[.]"?([A-Za-z0-9_]+)"/, m)) { schema=m[1]; view=m[2] }
   else if (match(line, /VIEW[[:space:]]+([A-Za-z0-9_]+)[.]+([A-Za-z0-9_]+)/, m2)) { schema=m2[1]; view=m2[2] }
-  current=schema "." view; gsub(/"/,"",current)
-  views[current]=1
+  current=schema "." view; gsub(/"/,"",current); views[current]=1
 }
 END{
   print "# Views" > "'"${VIEWS_MD}"'"
@@ -184,7 +168,6 @@ awk '
 BEGIN{ IGNORECASE=1 }
 /^[[:space:]]*CREATE[[:space:]]+(OR[[:space:]]+REPLACE[[:space:]]+)?FUNCTION[[:space:]]/ {
   sig=$0
-  # cut after RETURNS or AS if present
   sub(/[[:space:]]+RETURNS.*/,"",sig)
   sub(/[[:space:]]+AS.*/,"",sig)
   gsub(/^[[:space:]]+/,"",sig)
