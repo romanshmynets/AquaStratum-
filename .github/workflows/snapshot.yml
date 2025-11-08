@@ -1,0 +1,48 @@
+name: Auto Snapshot on Push (main)
+
+on:
+  push:
+    branches: [ "main" ]
+    paths-ignore:
+      - 'snapshots/**'
+      - 'state/**'
+      - 'sbom/**'
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up git identity
+        run: |
+          git config user.name "snapshot-bot"
+          git config user.email "snapshot-bot@users.noreply.github.com"
+
+      - name: Make snapshot
+        run: |
+          chmod +x scripts/make_snapshot.sh
+          ./scripts/make_snapshot.sh
+
+      - name: Commit snapshot file
+        run: |
+          git add snapshots/
+          if git diff --cached --quiet; then
+            echo "No snapshot changes."
+            exit 0
+          fi
+          git commit -m "chore(snapshot): add snapshot for $GITHUB_SHA [skip ci]"
+          git push origin HEAD:${GITHUB_REF_NAME}
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-snapshots-${{ github.run_number }}
+          path: snapshots/*.md
