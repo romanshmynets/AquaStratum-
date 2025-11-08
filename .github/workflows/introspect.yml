@@ -7,6 +7,8 @@ on:
       - 'snapshots/**'
       - 'state/**'
       - 'sbom/**'
+  schedule:
+    - cron: '10 16 * * *'   # 03:10 Australia/Melbourne (UTC 16:10)
   workflow_dispatch:
 
 permissions:
@@ -40,7 +42,7 @@ jobs:
       - name: Install tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y tree ripgrep universal-ctags jq
+          sudo apt-get install -y tree ripgrep universal-ctags jq graphviz
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin v1.16.0
 
       - name: Setup Supabase CLI
@@ -48,7 +50,7 @@ jobs:
         with:
           version: latest
 
-      - name: Collect project state
+      - name: Collect project state (fs/deps/env/docker/index)
         run: |
           chmod +x scripts/collect_state.sh
           ./scripts/collect_state.sh
@@ -62,23 +64,21 @@ jobs:
           SHA="$(git rev-parse --short HEAD)"
           OUT="state/${TS}_${SHA}/db"
           mkdir -p "${OUT}"
+          echo "OUT_DIR=${OUT}" >> "$GITHUB_ENV"
+          echo "TS=${TS}" >> "$GITHUB_ENV"
+          echo "SHA=${SHA}" >> "$GITHUB_ENV"
 
           supabase login "$SUPABASE_ACCESS_TOKEN"
           supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
-          # schema-only dump
           supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" --schema-only -f "${OUT}/schema.sql"
-          echo "OUT_DIR=${OUT}" >> "$GITHUB_ENV"
 
-      - name: Inventory DB tables
+      - name: Inventory DB objects and ERD
         shell: bash
         run: |
-          chmod +x scripts/inventory_db.sh
+          chmod +x scripts/inventory_db.sh scripts/erd_from_schema.sh
           scripts/inventory_db.sh "${OUT_DIR}/schema.sql" "${OUT_DIR}"
-
-          # Print short report to Job Summary
-          echo "## DB Tables (from schema dump)" >> $GITHUB_STEP_SUMMARY
-          head -n 200 "${OUT_DIR}/TABLES.md" >> $GITHUB_STEP_SUMMARY || true
+          scripts/erd_from_schema.sh "${OUT_DIR}/FK.json" "${OUT_DIR}"
 
       - name: Generate SBOM (syft)
         run: |
@@ -91,25 +91,26 @@ jobs:
           chmod +x scripts/make_snapshot.sh
           ./scripts/make_snapshot.sh
 
-      - name: Commit state, SBOM & snapshot
+      - name: Build summary (state diff and db overview)
+        shell: bash
         run: |
-          git add state/ sbom/ snapshots/
-          if git diff --cached --quiet; then
-            echo "No changes."
-            exit 0
-          fi
-          git commit -m "chore(introspect): state+SBOM+snapshot for $GITHUB_SHA [skip ci]"
-          git stash push -u -m "temp-introspect" || true
-          git pull --rebase origin "${GITHUB_REF_NAME}" || true
-          git stash pop || true
-          git push origin HEAD:"${GITHUB_REF_NAME}"
+          set -e
+          echo "## Repository State @ ${TS} (${SHA})" >> $GITHUB_STEP_SUMMARY
 
-      - name: Upload artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: repo-introspection-${{ github.run_number }}
-          path: |
-            state/**
-            sbom/**
-            snapshots/*.md
+          # top-level dirs in new state
+          echo "### State contents" >> $GITHUB_STEP_SUMMARY
+          find "state/${TS}_${SHA}" -maxdepth 2 -type d | sed 's|^|- |' | head -n 200 >> $GITHUB_STEP_SUMMARY || true
+
+          # DB overview
+          echo -e "\n### Database (from dump)" >> $GITHUB_STEP_SUMMARY
+          TCOUNT=$(grep -cE "^[[:space:]]*CREATE[[:space:]]+TABLE[[:space:]]" "${OUT_DIR}/schema.sql" || true)
+          VCOUNT=$(grep -cE "^[[:space:]]*CREATE[[:space:]]+(OR[[:space:]]+REPLACE[[:space:]]+)?VIEW" "${OUT_DIR}/schema.sql" || true)
+          FCOUNT=$(grep -cE "^[[:space:]]*CREATE[[:space:]]+(OR[[:space:]]+REPLACE[[:space:]]+)?FUNCTION" "${OUT_DIR}/schema.sql" || true)
+          ICOUNT=$(grep -cE "^[[:space:]]*CREATE[[:space:]]+INDEX" "${OUT_DIR}/schema.sql" || true)
+          echo "- tables: ${TCOUNT}" >> $GITHUB_STEP_SUMMARY
+          echo "- views: ${VCOUNT}" >> $GITHUB_STEP_SUMMARY
+          echo "- functions: ${FCOUNT}" >> $GITHUB_STEP_SUMMARY
+          echo "- indexes: ${ICOUNT}" >> $GITHUB_STEP_SUMMARY
+
+          # first 30 tables
+          echo -e "\n#### First tables" >> $GITHUB_STEP_SUM
