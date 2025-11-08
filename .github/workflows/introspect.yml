@@ -44,7 +44,7 @@ jobs:
 
       - name: Git identity
         run: |
-          git config user.name  "introspect-bot"
+          git config user.name "introspect-bot"
           git config user.email "introspect-bot@users.noreply.github.com"
 
       - name: Install tooling
@@ -144,6 +144,41 @@ jobs:
           PNG="${OUT_DIR}/erd.png"
           {
             echo "digraph ERD {"
+            echo "  graph [rankdir=LR, bgcolor=white];"
+            echo "  node [shape=box, style=rounded, fontname=Arial];"
+            echo "  edge [color=gray50, arrowsize=0.7];"
+            jq -r '.[] | "\(.src_schema).\(.src_table)\n\(.tgt_schema).\(.tgt_table)"' "${OUT_DIR}/rpc/fks.json" | sort -u | \
+              while read n; do [ -n "$n" ] && echo "  \"$n\";"; done
+            jq -r '.[] | "\"\(.src_schema).\(.src_table)\" -> \"\(.tgt_schema).\(.tgt_table)\" [label=\"\(.src_columns) → \(.tgt_columns)\", fontsize=9];"' \
+              "${OUT_DIR}/rpc/fks.json"
+            echo "}"
+          } > "$DOT"
+          dot -Tpng "$DOT" -o "$PNG" || true
+
+      - name: Publish inventory to repo root & Pages
+        run: |
+          mkdir -p db_inventory public/api/db public/api/db_data
+          cp "${OUT_DIR}/rpc/"*.json db_inventory/ || true
+          cp -r "${OUT_DIR}/db_data/" public/api/db_data/ || true
+          cp db_inventory/*.json public/api/db/ || true
+          cp "${OUT_DIR}/erd.png" public/ || true
+
+      - name: Commit & Push results
+        run: |
+          git add state/ db_inventory/ public/
+          git commit -m "chore(introspect): rpc inventory + data for $GITHUB_SHA [skip ci]" || true
+          git stash push -u -m "temp-introspect" || true
+          git pull --rebase origin "${GITHUB_REF_NAME}" || true
+          git stash pop || true
+          git push origin HEAD:"${GITHUB_REF_NAME}"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4            echo "digraph ERD {"
             echo "  graph [rankdir=LR, bgcolor=white];"
             echo "  node [shape=box, style=rounded, fontname=Arial];"
             echo "  edge [color=gray50, arrowsize=0.7];"
