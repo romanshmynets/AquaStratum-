@@ -75,14 +75,29 @@ jobs:
         run: |
           set -euo pipefail
           INV="${OUT_DIR}/rpc"; mkdir -p "$INV"
-          hdr=(-H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" -H "Accept-Profile: introspect" -H "Content-Type: application/json")
-          curl -sS "${URL}/rest/v1/rpc/tables"  "${hdr[@]}" -d '{}' > "${INV}/tables.json"
-          curl -sS "${URL}/rest/v1/rpc/columns" "${hdr[@]}" -d '{}' > "${INV}/columns.json"
-          curl -sS "${URL}/rest/v1/rpc/pks"     "${hdr[@]}" -d '{}' > "${INV}/pks.json"
-          curl -sS "${URL}/rest/v1/rpc/fks"     "${hdr[@]}" -d '{}' > "${INV}/fks.json"
-          curl -sS "${URL}/rest/v1/rpc/indexes" "${hdr[@]}" -d '{}' > "${INV}/indexes.json"
-          curl -sS "${URL}/rest/v1/rpc/views"   "${hdr[@]}" -d '{}' > "${INV}/views.json"
-          jq '{table_count:(. | length), tables:[ .[] | (.schema_name + "." + .table_name) ]}' \
+
+          # ВАЖЛИВО: для RPC (POST) використовуємо Content-Profile: introspect
+          hdr=(-H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" \
+               -H "Content-Profile: introspect" -H "Accept-Profile: introspect" \
+               -H "Content-Type: application/json")
+
+          # тягнемо всі RPC і падаємо на не-2xx
+          curl -sSf "${URL}/rest/v1/rpc/tables"  "${hdr[@]}" -d '{}' > "${INV}/tables.json"
+          curl -sSf "${URL}/rest/v1/rpc/columns" "${hdr[@]}" -d '{}' > "${INV}/columns.json"
+          curl -sSf "${URL}/rest/v1/rpc/pks"     "${hdr[@]}" -d '{}' > "${INV}/pks.json"
+          curl -sSf "${URL}/rest/v1/rpc/fks"     "${hdr[@]}" -d '{}' > "${INV}/fks.json"
+          curl -sSf "${URL}/rest/v1/rpc/indexes" "${hdr[@]}" -d '{}' > "${INV}/indexes.json"
+          curl -sSf "${URL}/rest/v1/rpc/views"   "${hdr[@]}" -d '{}' > "${INV}/views.json"
+
+          # Перевіряємо, що tables.json — масив; інакше зберігаємо помилку та завершуємо крок
+          if ! jq -e 'type=="array"' "${INV}/tables.json" > /dev/null; then
+            echo "RPC returned non-array for tables:" | tee "${INV}/rpc_error.log"
+            cat "${INV}/tables.json" | tee -a "${INV}/rpc_error.log"
+            exit 5
+          fi
+
+          # summary з точною кількістю і повним списком таблиць
+          jq '{table_count: length, tables: [ .[] | (.schema_name + "." + .table_name) ]}' \
              "${INV}/tables.json" > "${INV}/summary.json"
 
       - name: Export table data via REST (service_role)
