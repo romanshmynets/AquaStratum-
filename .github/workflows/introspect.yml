@@ -7,6 +7,7 @@ on:
       - 'snapshots/**'
       - 'state/**'
       - 'sbom/**'
+      - 'db_inventory/**'
   workflow_dispatch:
 
 permissions:
@@ -26,8 +27,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
       - name: Mark repo as safe
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -47,14 +47,6 @@ jobs:
         uses: supabase/setup-cli@v1
         with:
           version: latest
-
-      - name: Validate Supabase secrets
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${SUPABASE_ACCESS_TOKEN:-}" || (echo "Missing SUPABASE_ACCESS_TOKEN" && exit 1)
-          test -n "${SUPABASE_PROJECT_ID:-}"   || (echo "Missing SUPABASE_PROJECT_ID" && exit 1)
-          test -n "${SUPABASE_DB_PASSWORD:-}"  || (echo "Missing SUPABASE_DB_PASSWORD" && exit 1)
 
       - name: Collect project state (fs/deps/env/docker/index)
         run: |
@@ -77,27 +69,23 @@ jobs:
           supabase login "$SUPABASE_ACCESS_TOKEN"
           supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
-          # ВАЖЛИВО: без --schema-only. Ця команда у поточній версії CLI дає дамп схеми (без даних).
+          # IMPORTANT: no --schema-only (deprecated). This dumps schema without data by default.
           supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" -f "${OUT}/schema.sql"
 
       - name: Inventory DB objects and ERD
         shell: bash
         run: |
-          chmod +x scripts/inventory_db.sh scripts/erd_from_schema.sh || true
-          if [ -f "scripts/inventory_db.sh" ]; then
-            scripts/inventory_db.sh "${OUT_DIR}/schema.sql" "${OUT_DIR}" || true
-          fi
-          if [ -f "scripts/erd_from_schema.sh" ]; then
-            scripts/erd_from_schema.sh "${OUT_DIR}/FK.json" "${OUT_DIR}" || true
-          fi
+          chmod +x scripts/inventory_db.sh scripts/erd_from_schema.sh
+          scripts/inventory_db.sh "${OUT_DIR}/schema.sql" "${OUT_DIR}"
+          scripts/erd_from_schema.sh "${OUT_DIR}/FK.json" "${OUT_DIR}"
 
-          # Short summary
-          echo "## Database snapshot" >> $GITHUB_STEP_SUMMARY
-          if [ -f "${OUT_DIR}/TABLES.md" ]; then
-            head -n 200 "${OUT_DIR}/TABLES.md" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "_Inventory not generated (optional script not present)_" >> $GITHUB_STEP_SUMMARY
-          fi
+      - name: Publish DB inventory to repo root
+        shell: bash
+        run: |
+          mkdir -p db_inventory
+          cp "${OUT_DIR}/TABLES.json" db_inventory/tables.json
+          cp "${OUT_DIR}/TABLES.md"   db_inventory/tables.md
+          jq 'length as $n | {table_count:$n, tables:keys|sort}' "${OUT_DIR}/TABLES.json" > db_inventory/summary.json
 
       - name: Generate SBOM (syft)
         run: |
@@ -110,14 +98,10 @@ jobs:
           chmod +x scripts/make_snapshot.sh
           ./scripts/make_snapshot.sh
 
-      - name: Commit state, SBOM & snapshot
+      - name: Commit state, SBOM, snapshot & DB inventory
         run: |
-          git add state/ sbom/ snapshots/
-          if git diff --cached --quiet; then
-            echo "No changes."
-            exit 0
-          fi
-          git commit -m "chore(introspect): state+SBOM+snapshot for $GITHUB_SHA [skip ci]" || true
+          git add state/ sbom/ snapshots/ db_inventory/
+          git commit -m "chore(introspect): state+SBOM+snapshot+DB inventory for $GITHUB_SHA [skip ci]" || true
           git stash push -u -m "temp-introspect" || true
           git pull --rebase origin "${GITHUB_REF_NAME}" || true
           git stash pop || true
@@ -132,3 +116,4 @@ jobs:
             state/**
             sbom/**
             snapshots/*.md
+            db_inventory/**
