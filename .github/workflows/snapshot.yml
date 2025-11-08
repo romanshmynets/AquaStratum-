@@ -6,6 +6,11 @@ on:
     paths-ignore:
       - "state/**"
       - "sbom/**"
+      - "snapshots/**"
+      - ".github/workflows/introspect.yml"
+      - "db_inventory/**"
+      - "public/**"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,8 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
       - name: Mark repo as safe
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -28,8 +32,8 @@ jobs:
 
       - name: Make snapshot
         run: |
-          chmod +x scripts/make_snapshot.sh
-          ./scripts/make_snapshot.sh
+          chmod +x scripts/make_snapshot.sh || true
+          if [ -x scripts/make_snapshot.sh ]; then ./scripts/make_snapshot.sh; fi
 
       - name: Commit snapshot file
         run: |
@@ -41,6 +45,7 @@ jobs:
           git push origin HEAD:"${GITHUB_REF_NAME}"
 
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: snapshot-${{ github.run_number }}
