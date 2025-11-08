@@ -75,7 +75,7 @@ jobs:
           supabase link --project-ref "$SUPABASE_PROJECT_ID"
           supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" -f "${OUT}/schema.sql"
 
-      - name: "RPC - fetch tables/columns/pks/fks/indexes/views"
+      - name: RPC - fetch tables/columns/pks/fks/indexes/views
         env:
           URL: ${{ secrets.SUPABASE_URL }}
           KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -84,7 +84,6 @@ jobs:
           INV="${OUT_DIR}/rpc"
           mkdir -p "$INV"
 
-          # Правильні headers (без лапок усередині)
           HDR1="apikey: ${KEY}"
           HDR2="Authorization: Bearer ${KEY}"
           HDR3="Accept: application/json"
@@ -179,28 +178,6 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
-
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4      - name: Publish inventory to repo root & Pages
-        run: |
-          mkdir -p db_inventory public/api/db public/api/db_data
-          cp "${OUT_DIR}/rpc/"*.json db_inventory/ || true
-          cp -r "${OUT_DIR}/db_data/" public/api/db_data/ || true
-          cp db_inventory/*.json public/api/db/ || true
-          cp "${OUT_DIR}/erd.png" public/ || true
-
-      - name: Commit & Push
-        run: |
-          git add state/ db_inventory/ public/
-          git commit -m "chore(introspect): rpc inventory + data for $GITHUB_SHA [skip ci]" || true
-          git stash push -u -m "temp-introspect" || true
-          git pull --rebase origin "${GITHUB_REF_NAME}" || true
-          git stash pop || true
-          git push origin HEAD:"${GITHUB_REF_NAME}"
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with: { path: public }
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
