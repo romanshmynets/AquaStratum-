@@ -34,9 +34,10 @@ jobs:
       DATA_MAX_ROWS: "200000"
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
       - name: Mark repo as safe
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -55,15 +56,21 @@ jobs:
 
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
-        with: { version: latest }
+        with:
+          version: latest
 
       - name: Dump DB schema via Supabase CLI
         id: dump
         run: |
           set -e
-          TS="$(date -u +%Y%m%dT%H%M%SZ)"; echo "TS=${TS}"  >> "$GITHUB_ENV"
-          SHA="$(git rev-parse --short HEAD)"; echo "SHA=${SHA}" >> "$GITHUB_ENV"
-          OUT="state/${TS}_${SHA}/db"; mkdir -p "${OUT}"; echo "OUT_DIR=${OUT}" >> "$GITHUB_ENV"
+          TS="$(date -u +%Y%m%dT%H%M%SZ)"
+          echo "TS=${TS}" >> "$GITHUB_ENV"
+          SHA="$(git rev-parse --short HEAD)"
+          echo "SHA=${SHA}" >> "$GITHUB_ENV"
+          OUT="state/${TS}_${SHA}/db"
+          mkdir -p "${OUT}"
+          echo "OUT_DIR=${OUT}" >> "$GITHUB_ENV"
+
           supabase login "$SUPABASE_ACCESS_TOKEN"
           supabase link --project-ref "$SUPABASE_PROJECT_ID"
           supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" -f "${OUT}/schema.sql"
@@ -74,27 +81,29 @@ jobs:
           KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
-          INV="${OUT_DIR}/rpc"; mkdir -p "$INV"
+          INV="${OUT_DIR}/rpc"
+          mkdir -p "$INV"
 
-          # ВАЖЛИВО: Content-Profile/Accept-Profile = introspect (схема функцій)
-          H1="-H apikey: ${KEY}"
-          H2="-H Authorization: Bearer ${KEY}"
-          H3="-H Accept: application/json"
-          H4="-H Content-Type: application/json"
-          H5="-H Content-Profile: introspect"
-          H6="-H Accept-Profile: introspect"
+          # Правильні headers (без лапок усередині)
+          HDR1="apikey: ${KEY}"
+          HDR2="Authorization: Bearer ${KEY}"
+          HDR3="Accept: application/json"
+          HDR4="Content-Type: application/json"
+          HDR5="Content-Profile: introspect"
+          HDR6="Accept-Profile: introspect"
 
-          curl -sSf "${URL}/rest/v1/rpc/tables"  $H1 $H2 $H3 $H4 $H5 $H6 -d '{}' > "${INV}/tables.json"
-          curl -sSf "${URL}/rest/v1/rpc/columns" $H1 $H2 $H3 $H4 $H5 $H6 -d '{}' > "${INV}/columns.json"
-          curl -sSf "${URL}/rest/v1/rpc/pks"     $H1 $H2 $H3 $H4 $H5 $H6 -d '{}' > "${INV}/pks.json"
-          curl -sSf "${URL}/rest/v1/rpc/fks"     $H1 $H2 $H3 $H4 $H5 $H6 -d '{}' > "${INV}/fks.json"
-          curl -sSf "${URL}/rest/v1/rpc/indexes" $H1 $H2 $H3 $H4 $H5 $H6 -d '{}' > "${INV}/indexes.json"
-          curl -sSf "${URL}/rest/v1/rpc/views"   $H1 $H2 $H3 $H4 $H5 $H6 -d '{}' > "${INV}/views.json"
+          for fn in tables columns pks fks indexes views; do
+            echo "Fetching ${fn}..."
+            curl -sSf "${URL}/rest/v1/rpc/${fn}" \
+              -H "${HDR1}" \
+              -H "${HDR2}" \
+              -H "${HDR3}" \
+              -H "${HDR4}" \
+              -H "${HDR5}" \
+              -H "${HDR6}" \
+              -d '{}' > "${INV}/${fn}.json"
+          done
 
-          # Перевірка, що повернувся масив таблиць
-          jq -e 'type=="array"' "${INV}/tables.json" > /dev/null
-
-          # summary з підрахунком і повним списком
           jq '{table_count: length, tables: [ .[] | (.schema_name + "." + .table_name) ]}' \
              "${INV}/tables.json" > "${INV}/summary.json"
 
@@ -104,20 +113,25 @@ jobs:
           KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
-          DATA_DIR="${OUT_DIR}/db_data"; mkdir -p "${DATA_DIR}"
-          BATCH=${DATA_BATCH:-5000}; MAX=${DATA_MAX_ROWS:-200000}
+          DATA_DIR="${OUT_DIR}/db_data"
+          mkdir -p "${DATA_DIR}"
+          BATCH=${DATA_BATCH:-5000}
+          MAX=${DATA_MAX_ROWS:-200000}
 
           jq -r '.[] | "\(.schema_name) \(.table_name)"' "${OUT_DIR}/rpc/tables.json" \
             | while read SCHEMA NAME; do
                 SAFE_SCHEMA="$(echo "$SCHEMA" | tr -cd '[:alnum:]_')"
-                SAFE_TABLE="$(echo "$NAME"   | tr -cd '[:alnum:]_')"
-                DEST_DIR="${DATA_DIR}/${SAFE_SCHEMA}"; mkdir -p "${DEST_DIR}"
-                DEST="${DEST_DIR}/${SAFE_TABLE}.jsonl"; : > "${DEST}"
+                SAFE_TABLE="$(echo "$NAME" | tr -cd '[:alnum:]_')"
+                DEST_DIR="${DATA_DIR}/${SAFE_SCHEMA}"
+                mkdir -p "${DEST_DIR}"
+                DEST="${DEST_DIR}/${SAFE_TABLE}.jsonl"
+                : > "${DEST}"
 
                 off=0
                 while [ $off -lt $MAX ]; do
                   RESP="$(curl -sS "${URL}/rest/v1/${SAFE_TABLE}?select=*&limit=${BATCH}&offset=${off}" \
-                               -H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" \
+                               -H "apikey: ${KEY}" \
+                               -H "Authorization: Bearer ${KEY}" \
                                -H "Accept-Profile: ${SCHEMA}")"
                   cnt="$(echo "$RESP" | jq 'length')"
                   [ "$cnt" = "0" ] && break
@@ -129,7 +143,8 @@ jobs:
 
       - name: ERD (from FK)
         run: |
-          DOT="${OUT_DIR}/erd.dot"; PNG="${OUT_DIR}/erd.png"
+          DOT="${OUT_DIR}/erd.dot"
+          PNG="${OUT_DIR}/erd.png"
           {
             echo "digraph ERD {"
             echo "  graph [rankdir=LR, bgcolor=white];"
@@ -144,6 +159,29 @@ jobs:
           dot -Tpng "$DOT" -o "$PNG" || true
 
       - name: Publish inventory to repo root & Pages
+        run: |
+          mkdir -p db_inventory public/api/db public/api/db_data
+          cp "${OUT_DIR}/rpc/"*.json db_inventory/ || true
+          cp -r "${OUT_DIR}/db_data/" public/api/db_data/ || true
+          cp db_inventory/*.json public/api/db/ || true
+          cp "${OUT_DIR}/erd.png" public/ || true
+
+      - name: Commit & Push results
+        run: |
+          git add state/ db_inventory/ public/
+          git commit -m "chore(introspect): rpc inventory + data for $GITHUB_SHA [skip ci]" || true
+          git stash push -u -m "temp-introspect" || true
+          git pull --rebase origin "${GITHUB_REF_NAME}" || true
+          git stash pop || true
+          git push origin HEAD:"${GITHUB_REF_NAME}"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4      - name: Publish inventory to repo root & Pages
         run: |
           mkdir -p db_inventory public/api/db public/api/db_data
           cp "${OUT_DIR}/rpc/"*.json db_inventory/ || true
