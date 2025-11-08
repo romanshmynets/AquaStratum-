@@ -1,0 +1,37 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 2
+trim_trailing_whitespace = true
+
+2.2 .gitattributes (корінь)
+
+* text=auto eol=lf
+
+2.3 .gitignore (корінь)
+
+# Build / caches
+node_modules/
+dist/
+build/
+.tmp/
+.cache/
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local env
+.env
+.env.local
+
+# Ми навмисно тримаємо snapshots/, state/, sbom/ у репо (історія артефактів)
