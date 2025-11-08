@@ -4,11 +4,11 @@ on:
   push:
     branches: [ "main" ]
     paths-ignore:
-      - 'snapshots/**'
-      - 'state/**'
-      - 'sbom/**'
-      - 'db_inventory/**'
-      - 'public/**'
+      - "snapshots/**"
+      - "state/**"
+      - "sbom/**"
+      - "db_inventory/**"
+      - "public/**"
   workflow_dispatch:
 
 permissions:
@@ -24,23 +24,26 @@ jobs:
   introspect:
     runs-on: ubuntu-latest
     env:
-      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
-      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ACCESS_TOKEN:     ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID:       ${{ secrets.SUPABASE_PROJECT_ID }}
+      SUPABASE_DB_PASSWORD:      ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       DATA_BATCH: "5000"
       DATA_MAX_ROWS: "200000"
+
     steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Mark repo as safe
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
       - name: Git identity
         run: |
-          git config user.name "introspect-bot"
+          git config user.name  "introspect-bot"
           git config user.email "introspect-bot@users.noreply.github.com"
 
       - name: Install tooling
@@ -51,14 +54,15 @@ jobs:
 
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
-        with: { version: latest }
+        with:
+          version: latest
 
       - name: Dump DB schema via Supabase CLI
         id: dump
         shell: bash
         run: |
           set -e
-          TS="$(date -u +%Y%m%dT%H%M%SZ)"; echo "TS=${TS}" >> "$GITHUB_ENV"
+          TS="$(date -u +%Y%m%dT%H%M%SZ)"; echo "TS=${TS}"  >> "$GITHUB_ENV"
           SHA="$(git rev-parse --short HEAD)"; echo "SHA=${SHA}" >> "$GITHUB_ENV"
           OUT="state/${TS}_${SHA}/db"; mkdir -p "${OUT}"; echo "OUT_DIR=${OUT}" >> "$GITHUB_ENV"
           supabase login "$SUPABASE_ACCESS_TOKEN"
@@ -74,16 +78,14 @@ jobs:
           set -euo pipefail
           INV="${OUT_DIR}/rpc"; mkdir -p "$INV"
           hdr=(-H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" -H "Accept-Profile: introspect" -H "Content-Type: application/json")
-
           curl -sS "${URL}/rest/v1/rpc/tables"  "${hdr[@]}" -d '{}' > "${INV}/tables.json"
           curl -sS "${URL}/rest/v1/rpc/columns" "${hdr[@]}" -d '{}' > "${INV}/columns.json"
           curl -sS "${URL}/rest/v1/rpc/pks"     "${hdr[@]}" -d '{}' > "${INV}/pks.json"
           curl -sS "${URL}/rest/v1/rpc/fks"     "${hdr[@]}" -d '{}' > "${INV}/fks.json"
           curl -sS "${URL}/rest/v1/rpc/indexes" "${hdr[@]}" -d '{}' > "${INV}/indexes.json"
           curl -sS "${URL}/rest/v1/rpc/views"   "${hdr[@]}" -d '{}' > "${INV}/views.json"
-
-          # summary (точна кількість і назви таблиць)
-          jq '{table_count:(. | length), tables:[ .[] | (.schema + "." + .name) ]}' "${INV}/tables.json" > "${INV}/summary.json"
+          jq '{table_count:(. | length), tables:[ .[] | (.schema_name || .schema) + "." + (.table_name || .view_name || .name) ]}' \
+             "${INV}/tables.json" > "${INV}/summary.json"
 
       - name: Export table data via REST (service_role)
         shell: bash
@@ -94,7 +96,7 @@ jobs:
           set -euo pipefail
           DATA_DIR="${OUT_DIR}/db_data"; mkdir -p "${DATA_DIR}"
           BATCH=${DATA_BATCH:-5000}; MAX=${DATA_MAX_ROWS:-200000}
-          jq -r '.[] | "\(.schema) \(.name)"' "${OUT_DIR}/rpc/tables.json" | while read SCHEMA NAME; do
+          jq -r '.[] | "\(.schema_name) \(.table_name)"' "${OUT_DIR}/rpc/tables.json" | while read SCHEMA NAME; do
             SAFE_SCHEMA="$(echo "$SCHEMA" | tr -cd '[:alnum:]_')"
             SAFE_TABLE="$(echo "$NAME"   | tr -cd '[:alnum:]_')"
             DEST_DIR="${DATA_DIR}/${SAFE_SCHEMA}"; mkdir -p "${DEST_DIR}"
@@ -122,7 +124,7 @@ jobs:
             echo "  edge [color=gray50, arrowsize=0.7];"
             jq -r '.[] | "\(.src_schema).\(.src_table)\n\(.tgt_schema).\(.tgt_table)"' "${OUT_DIR}/rpc/fks.json" | sort -u | \
               while read n; do [ -n "$n" ] && echo "  \"$n\";"; done
-            jq -r '.[] | "\"\(.src_schema).\(.src_table)\" -> \"\(.tgt_schema).\(.tgt_table)\" [label=\"\(.src_cols) → \(.tgt_cols)\", fontsize=9];"' \
+            jq -r '.[] | "\"\(.src_schema).\(.src_table)\" -> \"\(.tgt_schema).\(.tgt_table)\" [label=\"\(.src_columns) → \(.tgt_columns)\", fontsize=9];"' \
               "${OUT_DIR}/rpc/fks.json"
             echo "}"
           } > "$DOT"
@@ -133,13 +135,7 @@ jobs:
           mkdir -p db_inventory public/api/db public/api/db_data
           cp "${OUT_DIR}/rpc/"*.json db_inventory/ || true
           cp -r "${OUT_DIR}/db_data/" public/api/db_data/ || true
-          cp db_inventory/summary.json public/api/db/
-          cp db_inventory/tables.json  public/api/db/
-          cp db_inventory/columns.json public/api/db/
-          cp db_inventory/pks.json     public/api/db/
-          cp db_inventory/fks.json     public/api/db/
-          cp db_inventory/indexes.json public/api/db/
-          cp db_inventory/views.json   public/api/db/
+          cp db_inventory/*.json public/api/db/ || true
           cp "${OUT_DIR}/erd.png" public/ || true
 
       - name: Commit & Push
@@ -153,7 +149,8 @@ jobs:
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
-        with: { path: public }
+        with:
+          path: public
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
