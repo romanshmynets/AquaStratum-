@@ -16,65 +16,70 @@ jobs:
   migrate:
     runs-on: ubuntu-latest
     env:
-      # Якщо додаси цей секрет — спробуємо pooler як запасний канал (порт 6543)
-      DATABASE_URL_POOLER: ${{ secrets.DATABASE_URL_POOLER }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}              # postgres://...:5432/<db>
+      DATABASE_URL_POOLER: ${{ secrets.DATABASE_URL_POOLER }} # (optional) postgres://...:6543/<db>
       PGCONNECT_TIMEOUT: "15"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install PostgreSQL client & dns tools
+      - name: Install PostgreSQL client & dns utils
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-client dnsutils
 
-      - name: Verify DATABASE_URL
+      - name: Verify secrets
         run: |
           test -n "$DATABASE_URL" || (echo "DATABASE_URL missing" && exit 1)
 
+      # Build IPv4-forced URI for primary (5432):
+      # - беремо хост з DATABASE_URL
+      # - резолвимо IPv4 через dig, якщо ні — через getent
+      # - додаємо hostaddr=<IPv4>&sslmode=require до URI, щоб обійти IPv6/SNI нюанси
       - name: Build IPv4-forced DB URL
-        id: v4
+        id: ipv4
         shell: bash
         run: |
-          # Витягнути hostname з URI (після '@' і до ':' або '/')
-          HOST="$(echo "$DATABASE_URL" | sed -E 's|^[^@]+@([^:/?]+).*|\1|')"
+          HOST="$(echo "$DATABASE_URL" | sed -E 's|^[a-zA-Z]+://[^@]+@([^:/?]+).*|\1|')"
           echo "Host: $HOST"
 
-          # Отримати першу A-запис (IPv4)
-          IPV4="$(getent ahostsv4 "$HOST" | awk '{print $1; exit}')"
+          IPV4="$(dig +short A "$HOST" | head -n1)"
           if [ -z "$IPV4" ]; then
-            echo "Не вдалося визначити IPv4 для $HOST"
+            IPV4="$(getent ahostsv4 "$HOST" | awk '{print $1; exit}')"
+          fi
+          if [ -z "$IPV4" ]; then
+            echo "Failed to resolve IPv4 for $HOST"
             exit 1
           fi
           echo "IPv4: $IPV4"
 
-          # Додати параметр hostaddr=IPv4 (URI libpq підтримує це)
           SEP="$(echo "$DATABASE_URL" | grep -q '?' && echo '&' || echo '?')"
           DB_URL_V4="${DATABASE_URL}${SEP}hostaddr=${IPV4}&sslmode=require"
           echo "DB_URL_V4=$DB_URL_V4" >> "$GITHUB_ENV"
 
-      - name: Run schema (idempotent) via IPv4
+      # Простий healthcheck до primary (5432)
+      - name: Healthcheck (primary IPv4)
+        shell: bash
+        run: |
+          psql "$DB_URL_V4" -Atc "select 1"
+
+      # ВАЖЛИВО: схему застосовуємо тільки на primary (не через pooler)
+      - name: Run schema (idempotent) on primary IPv4
         shell: bash
         run: |
           psql "$DB_URL_V4" -v ON_ERROR_STOP=1 -f schema.sql
 
-      - name: Run seed (optional) via IPv4
+      # Seed теж через primary (DDL/sequence/trigger можуть знадобитися)
+      - name: Run seed (optional) on primary IPv4
         if: hashFiles('seed.sql') != ''
         shell: bash
         run: |
           psql "$DB_URL_V4" -v ON_ERROR_STOP=1 -f seed.sql
 
-      # --- Fallback: якщо раптом IPv4 кроки впадуть, спробувати через Pooler ---
-      - name: Fallback schema via Pooler (optional)
-        if: failure() && env.DATABASE_URL_POOLER != ''
+      # (опціонально) Перевірка конекту через pooler лише як smoketest (без DDL)
+      - name: Pooler smoketest (optional)
+        if: env.DATABASE_URL_POOLER != ''
         shell: bash
         run: |
-          echo "Trying pooler URL..."
-          psql "$DATABASE_URL_POOLER" -v ON_ERROR_STOP=1 -f schema.sql
-
-      - name: Fallback seed via Pooler (optional)
-        if: failure() && env.DATABASE_URL_POOLER != '' && hashFiles('seed.sql') != ''
-        shell: bash
-        run: |
-          psql "$DATABASE_URL_POOLER" -v ON_ERROR_STOP=1 -f seed.sql
+          echo "Testing pooler connectivity (no DDL)..."
+          psql "$DATABASE_URL_POOLER" -Atc "select current_database(), now()"
