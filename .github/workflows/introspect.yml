@@ -59,7 +59,6 @@ jobs:
 
       - name: Dump DB schema via Supabase CLI
         id: dump
-        shell: bash
         run: |
           set -e
           TS="$(date -u +%Y%m%dT%H%M%SZ)"; echo "TS=${TS}"  >> "$GITHUB_ENV"
@@ -69,8 +68,7 @@ jobs:
           supabase link --project-ref "$SUPABASE_PROJECT_ID"
           supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" -f "${OUT}/schema.sql"
 
-            - name: "RPC - fetch tables/columns/pks/fks/indexes/views"
-        shell: bash
+      - name: "RPC - fetch tables/columns/pks/fks/indexes/views"
         env:
           URL: ${{ secrets.SUPABASE_URL }}
           KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -78,21 +76,16 @@ jobs:
           set -euo pipefail
           INV="${OUT_DIR}/rpc"; mkdir -p "$INV"
           hdr=(-H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" -H "Accept-Profile: introspect" -H "Content-Type: application/json")
-
           curl -sS "${URL}/rest/v1/rpc/tables"  "${hdr[@]}" -d '{}' > "${INV}/tables.json"
           curl -sS "${URL}/rest/v1/rpc/columns" "${hdr[@]}" -d '{}' > "${INV}/columns.json"
           curl -sS "${URL}/rest/v1/rpc/pks"     "${hdr[@]}" -d '{}' > "${INV}/pks.json"
           curl -sS "${URL}/rest/v1/rpc/fks"     "${hdr[@]}" -d '{}' > "${INV}/fks.json"
           curl -sS "${URL}/rest/v1/rpc/indexes" "${hdr[@]}" -d '{}' > "${INV}/indexes.json"
           curl -sS "${URL}/rest/v1/rpc/views"   "${hdr[@]}" -d '{}' > "${INV}/views.json"
-
-          # summary з точною кількістю і повним списком таблиць
           jq '{table_count:(. | length), tables:[ .[] | (.schema_name + "." + .table_name) ]}' \
              "${INV}/tables.json" > "${INV}/summary.json"
 
-
       - name: Export table data via REST (service_role)
-        shell: bash
         env:
           URL: ${{ secrets.SUPABASE_URL }}
           KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -118,7 +111,6 @@ jobs:
           done
 
       - name: ERD (from FK)
-        shell: bash
         run: |
           DOT="${OUT_DIR}/erd.dot"; PNG="${OUT_DIR}/erd.png"
           {
