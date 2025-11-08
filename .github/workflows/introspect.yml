@@ -30,8 +30,6 @@ jobs:
       SUPABASE_DB_PASSWORD:      ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      DATA_BATCH: "5000"
-      DATA_MAX_ROWS: "200000"
 
     steps:
       - name: Checkout repository
@@ -50,9 +48,8 @@ jobs:
       - name: Install tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq graphviz curl
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-            | sudo sh -s -- -b /usr/local/bin v1.16.0
+          sudo apt-get install -y jq curl
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin v1.16.0
 
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
@@ -84,28 +81,45 @@ jobs:
           INV="${OUT_DIR}/rpc"
           mkdir -p "$INV"
 
-          HDR1="apikey: ${KEY}"
-          HDR2="Authorization: Bearer ${KEY}"
-          HDR3="Accept: application/json"
-          HDR4="Content-Type: application/json"
-          HDR5="Content-Profile: introspect"
+          HEADER_APIKEY="apikey: ${KEY}"
+          HEADER_AUTH="Authorization: Bearer ${KEY}"
+          HEADER_ACCEPT="Accept: application/json"
+          HEADER_CT="Content-Type: application/json"
+          HEADER_PROFILE="Content-Profile: introspect"
 
-          for fn in tables columns pks fks indexes views; do
-            echo "Fetching ${fn}..."
-            curl -sSf "${URL}/rest/v1/rpc/${fn}" \
-              -H "${HDR1}" \
-              -H "${HDR2}" \
-              -H "${HDR3}" \
-              -H "${HDR4}" \
-              -H "${HDR5}" \
-              -d '{}' > "${INV}/${fn}.json"
+          for FN in tables columns pks fks indexes views; do
+            echo "Fetching ${FN}..."
+            curl -sSf "${URL}/rest/v1/rpc/${FN}" \
+              -H "${HEADER_APIKEY}" \
+              -H "${HEADER_AUTH}" \
+              -H "${HEADER_ACCEPT}" \
+              -H "${HEADER_CT}" \
+              -H "${HEADER_PROFILE}" \
+              -d '{}' > "${INV}/${FN}.json"
           done
 
           jq '{table_count: length, tables: [ .[] | (.schema_name + "." + .table_name) ]}' \
-             "${INV}/tables.json" > "${INV}/summary.json"
+            "${INV}/tables.json" > "${INV}/summary.json"
 
-      - name: Export table data via REST (service_role)
-        env:
+      - name: Publish inventory to repo root & Pages
+        run: |
+          mkdir -p db_inventory public/api/db
+          cp "${OUT_DIR}/rpc/"*.json db_inventory/ || true
+          cp db_inventory/*.json public/api/db/ || true
+
+      - name: Commit & Push results
+        run: |
+          git add state/ db_inventory/ public/
+          git commit -m "chore(introspect): rpc inventory for $GITHUB_SHA [skip ci]" || true
+          git push origin HEAD:"${GITHUB_REF_NAME}"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4        env:
           URL: ${{ secrets.SUPABASE_URL }}
           KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
