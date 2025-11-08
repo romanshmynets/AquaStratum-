@@ -17,7 +17,6 @@ concurrency:
 jobs:
   introspect:
     runs-on: ubuntu-latest
-
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
@@ -26,7 +25,7 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install tools
@@ -41,7 +40,7 @@ jobs:
         with:
           version: latest
 
-      - name: Dump DB schema via Supabase CLI
+      - name: Dump DB schema
         id: dump
         run: |
           set -e
@@ -50,12 +49,11 @@ jobs:
           OUT="state/${TS}_${SHA}/db"
           mkdir -p "${OUT}"
           echo "OUT_DIR=${OUT}" >> "$GITHUB_ENV"
-
           supabase login "$SUPABASE_ACCESS_TOKEN"
           supabase link --project-ref "$SUPABASE_PROJECT_ID"
           supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" -f "${OUT}/schema.sql"
 
-      - name: RPC fetch (tables, columns, etc.)
+      - name: Fetch RPC JSON (tables/columns/pks/fks/indexes/views)
         env:
           URL: ${{ secrets.SUPABASE_URL }}
           KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -63,9 +61,7 @@ jobs:
           set -euo pipefail
           INV="${OUT_DIR}/rpc"
           mkdir -p "$INV"
-
           for FN in tables columns pks fks indexes views; do
-            echo "Fetching ${FN}..."
             curl -sSf "${URL}/rest/v1/rpc/${FN}" \
               -H "apikey: ${KEY}" \
               -H "Authorization: Bearer ${KEY}" \
@@ -74,11 +70,10 @@ jobs:
               -H "Accept-Profile: introspect" \
               -d '{}' > "${INV}/${FN}.json"
           done
-
           jq '{table_count: length, tables: [ .[] | (.schema_name + "." + .table_name) ]}' \
             "${INV}/tables.json" > "${INV}/summary.json"
 
-      - name: Publish inventory
+      - name: Publish inventory to repo
         run: |
           mkdir -p db_inventory public/api/db
           cp "${OUT_DIR}/rpc/"*.json db_inventory/ || true
@@ -98,119 +93,5 @@ jobs:
           path: public
 
       - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4              done
-
-      - name: ERD (from FK)
-        run: |
-          DOT="${OUT_DIR}/erd.dot"
-          PNG="${OUT_DIR}/erd.png"
-          {
-            echo "digraph ERD {"
-            echo "  graph [rankdir=LR, bgcolor=white];"
-            echo "  node [shape=box, style=rounded, fontname=Arial];"
-            echo "  edge [color=gray50, arrowsize=0.7];"
-            jq -r '.[] | "\(.src_schema).\(.src_table)\n\(.tgt_schema).\(.tgt_table)"' "${OUT_DIR}/rpc/fks.json" | sort -u | \
-              while read n; do [ -n "$n" ] && echo "  \"$n\";"; done
-            jq -r '.[] | "\"\(.src_schema).\(.src_table)\" -> \"\(.tgt_schema).\(.tgt_table)\" [label=\"\(.src_columns) → \(.tgt_columns)\", fontsize=9];"' \
-              "${OUT_DIR}/rpc/fks.json"
-            echo "}"
-          } > "$DOT"
-          dot -Tpng "$DOT" -o "$PNG" || true
-
-      - name: Publish inventory to repo root & Pages
-        run: |
-          mkdir -p db_inventory public/api/db public/api/db_data
-          cp "${OUT_DIR}/rpc/"*.json db_inventory/ || true
-          cp -r "${OUT_DIR}/db_data/" public/api/db_data/ || true
-          cp db_inventory/*.json public/api/db/ || true
-          cp "${OUT_DIR}/erd.png" public/ || true
-
-      - name: Commit & Push results
-        run: |
-          git add state/ db_inventory/ public/
-          git commit -m "chore(introspect): rpc inventory + data for $GITHUB_SHA [skip ci]" || true
-          git stash push -u -m "temp-introspect" || true
-          git pull --rebase origin "${GITHUB_REF_NAME}" || true
-          git stash pop || true
-          git push origin HEAD:"${GITHUB_REF_NAME}"
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4            echo "digraph ERD {"
-            echo "  graph [rankdir=LR, bgcolor=white];"
-            echo "  node [shape=box, style=rounded, fontname=Arial];"
-            echo "  edge [color=gray50, arrowsize=0.7];"
-            jq -r '.[] | "\(.src_schema).\(.src_table)\n\(.tgt_schema).\(.tgt_table)"' "${OUT_DIR}/rpc/fks.json" | sort -u | \
-              while read n; do [ -n "$n" ] && echo "  \"$n\";"; done
-            jq -r '.[] | "\"\(.src_schema).\(.src_table)\" -> \"\(.tgt_schema).\(.tgt_table)\" [label=\"\(.src_columns) → \(.tgt_columns)\", fontsize=9];"' \
-              "${OUT_DIR}/rpc/fks.json"
-            echo "}"
-          } > "$DOT"
-          dot -Tpng "$DOT" -o "$PNG" || true
-
-      - name: Publish inventory to repo root & Pages
-        run: |
-          mkdir -p db_inventory public/api/db public/api/db_data
-          cp "${OUT_DIR}/rpc/"*.json db_inventory/ || true
-          cp -r "${OUT_DIR}/db_data/" public/api/db_data/ || true
-          cp db_inventory/*.json public/api/db/ || true
-          cp "${OUT_DIR}/erd.png" public/ || true
-
-      - name: Commit & Push results
-        run: |
-          git add state/ db_inventory/ public/
-          git commit -m "chore(introspect): rpc inventory + data for $GITHUB_SHA [skip ci]" || true
-          git stash push -u -m "temp-introspect" || true
-          git pull --rebase origin "${GITHUB_REF_NAME}" || true
-          git stash pop || true
-          git push origin HEAD:"${GITHUB_REF_NAME}"
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-
-      - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
-```0          PNG="${OUT_DIR}/erd.png"
-          {
-            echo "digraph ERD {"
-            echo "  graph [rankdir=LR, bgcolor=white];"
-            echo "  node [shape=box, style=rounded, fontname=Arial];"
-            echo "  edge [color=gray50, arrowsize=0.7];"
-            jq -r '.[] | "\(.src_schema).\(.src_table)\n\(.tgt_schema).\(.tgt_table)"' "${OUT_DIR}/rpc/fks.json" | sort -u | \
-              while read n; do [ -n "$n" ] && echo "  \"$n\";"; done
-            jq -r '.[] | "\"\(.src_schema).\(.src_table)\" -> \"\(.tgt_schema).\(.tgt_table)\" [label=\"\(.src_columns) → \(.tgt_columns)\", fontsize=9];"' \
-              "${OUT_DIR}/rpc/fks.json"
-            echo "}"
-          } > "$DOT"
-          dot -Tpng "$DOT" -o "$PNG" || true
-
-      - name: Publish inventory to repo root & Pages
-        run: |
-          mkdir -p db_inventory public/api/db public/api/db_data
-          cp "${OUT_DIR}/rpc/"*.json db_inventory/ || true
-          cp -r "${OUT_DIR}/db_data/" public/api/db_data/ || true
-          cp db_inventory/*.json public/api/db/ || true
-          cp "${OUT_DIR}/erd.png" public/ || true
-
-      - name: Commit & Push results
-        run: |
-          git add state/ db_inventory/ public/
-          git commit -m "chore(introspect): rpc inventory + data for $GITHUB_SHA [skip ci]" || true
-          git stash push -u -m "temp-introspect" || true
-          git pull --rebase origin "${GITHUB_REF_NAME}" || true
-          git stash pop || true
-          git push origin HEAD:"${GITHUB_REF_NAME}"
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4
+        
