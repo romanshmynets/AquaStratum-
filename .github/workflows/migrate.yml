@@ -1,11 +1,11 @@
-name: Apply Supabase Schema
+name: Apply Supabase Schema (CLI)
 
 on:
   push:
     branches: [ "main" ]
     paths:
-      - "schema.sql"
-      - "seed.sql"
+      - "supabase/migrations/**"
+      - "supabase/seed.sql"
       - ".github/workflows/migrate.yml"
   workflow_dispatch:
 
@@ -16,84 +16,30 @@ jobs:
   migrate:
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}               # postgres://...:5432/<db>
-      DATABASE_URL_POOLER: ${{ secrets.DATABASE_URL_POOLER }} # optional postgres://...:6543/<db>
-      PGCONNECT_TIMEOUT: "15"
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install PostgreSQL client & DNS utils
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client dnsutils
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
 
-      - name: Verify secrets
+      - name: Link project (non-interactive)
         run: |
-          test -n "$DATABASE_URL" || (echo "DATABASE_URL missing" && exit 1)
+          supabase link --project-ref "$SUPABASE_PROJECT_ID" --no-open
 
-      # Robust host + IPv4 resolver (no sed)
-      - name: Build IPv4-forced DB URL
-        shell: bash
+      - name: Push migrations (and seed if present)
         run: |
-          set -euo pipefail
-          # 1) extract hostname from postgres URI: postgres://user:pass@HOST:PORT/db
-          HOST="$(echo "$DATABASE_URL" | awk -F'[@/]' '{print $2}' | awk -F':' '{print $1}')"
-          echo "Host: $HOST"
-
-          # 2) resolve IPv4 (prefer getent, then dig)
-          IPV4="$(getent ahostsv4 "$HOST" | awk '{print $1; exit}' || true)"
-          if [ -z "${IPV4:-}" ]; then
-            IPV4="$(dig +short A "$HOST" | head -n1 || true)"
-          fi
-          if [ -n "${IPV4:-}" ]; then
-            echo "IPv4: $IPV4"
-            SEP="$(echo "$DATABASE_URL" | grep -q '?' && echo '&' || echo '?')"
-            DB_URL_V4="${DATABASE_URL}${SEP}hostaddr=${IPV4}&sslmode=require"
+          if [ -f "supabase/seed.sql" ]; then
+            supabase db push --linked -p "$SUPABASE_DB_PASSWORD" --include-seed
           else
-            echo "IPv4 A-record not found; will use original DATABASE_URL"
-            DB_URL_V4="$DATABASE_URL"
+            supabase db push --linked -p "$SUPABASE_DB_PASSWORD"
           fi
 
-          echo "HOST=$HOST" >> "$GITHUB_ENV"
-          echo "IPV4=${IPV4:-}" >> "$GITHUB_ENV"
-          echo "DB_URL_V4=$DB_URL_V4" >> "$GITHUB_ENV"
-
-      # quick healthcheck against primary (try V4 first, then original)
-      - name: Healthcheck (primary)
-        shell: bash
+      - name: Show migration status (optional)
         run: |
-          set -e
-          if ! psql "$DB_URL_V4" -Atc "select 1"; then
-            echo "V4 healthcheck failed, trying original DATABASE_URL..."
-            psql "$DATABASE_URL" -Atc "select 1"
-          fi
-
-      # Apply schema ONLY on primary (not pooler)
-      - name: Run schema (idempotent) on primary
-        shell: bash
-        run: |
-          set -e
-          if ! psql "$DB_URL_V4" -v ON_ERROR_STOP=1 -f schema.sql; then
-            echo "Retry schema on original DATABASE_URL..."
-            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema.sql
-          fi
-
-      # Seed on primary too
-      - name: Run seed (optional) on primary
-        if: hashFiles('seed.sql') != ''
-        shell: bash
-        run: |
-          set -e
-          if ! psql "$DB_URL_V4" -v ON_ERROR_STOP=1 -f seed.sql; then
-            echo "Retry seed on original DATABASE_URL..."
-            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f seed.sql
-          fi
-
-      # Optional: pooler smoketest (no DDL)
-      - name: Pooler smoketest (optional)
-        if: env.DATABASE_URL_POOLER != ''
-        shell: bash
-        run: |
-          set -e
-          psql "$DATABASE_URL_POOLER" -Atc "select current_database(), now()"
+          supabase db pull --linked -p "$SUPABASE_DB_PASSWORD" --dry-run || true
