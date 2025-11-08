@@ -84,7 +84,6 @@ jobs:
           curl -sS "${URL}/rest/v1/rpc/fks"     "${hdr[@]}" -d '{}' > "${INV}/fks.json"
           curl -sS "${URL}/rest/v1/rpc/indexes" "${hdr[@]}" -d '{}' > "${INV}/indexes.json"
           curl -sS "${URL}/rest/v1/rpc/views"   "${hdr[@]}" -d '{}' > "${INV}/views.json"
-          # summary з точною кількістю і повним списком таблиць
           jq '{table_count:(. | length), tables:[ .[] | (.schema_name + "." + .table_name) ]}' \
              "${INV}/tables.json" > "${INV}/summary.json"
 
