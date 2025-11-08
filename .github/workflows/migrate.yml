@@ -30,7 +30,7 @@ jobs:
 
       - name: Link project (non-interactive)
         run: |
-          supabase link --project-ref "$SUPABASE_PROJECT_ID" --no-open
+          supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
       - name: Push migrations (and seed if present)
         run: |
