@@ -25,7 +25,8 @@ jobs:
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
       - name: Mark repo as safe
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -53,13 +54,19 @@ jobs:
 
       - name: Dump DB schema via Supabase CLI
         run: |
+          set -e
           TS="$(date -u +%Y%m%dT%H%M%SZ)"
           SHA="$(git rev-parse --short HEAD)"
           OUT="state/${TS}_${SHA}/db"
           mkdir -p "${OUT}"
 
-          supabase link --project-ref "$SUPABASE_PROJECT_ID" --no-open
-          # Експорт лише схеми (без даних)
+          # Авторизація CLI токеном
+          supabase login "$SUPABASE_ACCESS_TOKEN"
+
+          # Лінкування до проєкту
+          supabase link --project-ref "$SUPABASE_PROJECT_ID"
+
+          # Дамп схеми (без даних)
           supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" --schema-only -f "${OUT}/schema.sql" || true
 
       - name: Generate SBOM (syft)
