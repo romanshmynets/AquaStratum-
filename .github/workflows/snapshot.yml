@@ -4,23 +4,17 @@ on:
   push:
     branches: [ "main" ]
     paths-ignore:
-      - 'snapshots/**'
-      - 'state/**'
-      - 'sbom/**'
+      - "state/**"
+      - "sbom/**"
 
 permissions:
   contents: write
-
-concurrency:
-  group: snapshot-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
   snapshot:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -40,18 +34,14 @@ jobs:
       - name: Commit snapshot file
         run: |
           git add snapshots/
-          if git diff --cached --quiet; then
-            echo "No snapshot changes."
-            exit 0
-          fi
-          git commit -m "chore(snapshot): add snapshot for $GITHUB_SHA [skip ci]"
-          # --- handle remote updates and avoid non-fast-forward ---
+          git commit -m "chore(snapshot): add snapshot for $GITHUB_SHA [skip ci]" || true
+          git stash push -u -m "temp-snapshot" || true
           git pull --rebase origin "${GITHUB_REF_NAME}" || true
+          git stash pop || true
           git push origin HEAD:"${GITHUB_REF_NAME}"
 
       - name: Upload artifacts
-        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: repo-snapshots-${{ github.run_number }}
+          name: snapshot-${{ github.run_number }}
           path: snapshots/*.md
