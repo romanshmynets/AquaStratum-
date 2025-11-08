@@ -8,10 +8,15 @@ on:
       - 'state/**'
       - 'sbom/**'
       - 'db_inventory/**'
+      - 'public/**'
+  schedule:
+    - cron: '10 16 * * *'   # 03:10 Australia/Melbourne (UTC 16:10)
   workflow_dispatch:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 concurrency:
   group: introspect-${{ github.ref }}
@@ -24,7 +29,10 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      DATA_BATCH: "5000"         # розмір партії для REST export (можеш змінити)
+      DATA_MAX_ROWS: "1000000"   # максимум рядків на таблицю (ліміт безпеки)
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -40,7 +48,7 @@ jobs:
       - name: Install tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y tree ripgrep universal-ctags jq graphviz
+          sudo apt-get install -y tree ripgrep universal-ctags jq graphviz curl
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin v1.16.0
 
       - name: Setup Supabase CLI
@@ -50,8 +58,8 @@ jobs:
 
       - name: Collect project state (fs/deps/env/docker/index)
         run: |
-          chmod +x scripts/collect_state.sh
-          ./scripts/collect_state.sh
+          chmod +x scripts/collect_state.sh || true
+          if [ -x scripts/collect_state.sh ]; then ./scripts/collect_state.sh; else mkdir -p state; fi
 
       - name: Dump DB schema via Supabase CLI
         id: dump
@@ -69,7 +77,7 @@ jobs:
           supabase login "$SUPABASE_ACCESS_TOKEN"
           supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
-          # IMPORTANT: no --schema-only (deprecated). This dumps schema without data by default.
+          # schema dump (без даних)
           supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" -f "${OUT}/schema.sql"
 
       - name: Inventory DB objects and ERD
@@ -79,12 +87,58 @@ jobs:
           scripts/inventory_db.sh "${OUT_DIR}/schema.sql" "${OUT_DIR}"
           scripts/erd_from_schema.sh "${OUT_DIR}/FK.json" "${OUT_DIR}"
 
+      - name: Export DB data via REST (PostgREST)
+        shell: bash
+        env:
+          URL: ${{ secrets.SUPABASE_URL }}
+          KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          DATA_DIR="${OUT_DIR}/../db_data"
+          mkdir -p "${DATA_DIR}"
+
+          # таблиці з інвентаря
+          jq -r 'keys[]' "${OUT_DIR}/TABLES.json" | while read FQN; do
+            SCHEMA="${FQN%%.*}"
+            TABLE="${FQN#*.}"
+            SAFE_SCHEMA="$(echo "$SCHEMA" | tr -cd '[:alnum:]_')"
+            SAFE_TABLE="$(echo "$TABLE" | tr -cd '[:alnum:]_')"
+            DEST_DIR="${DATA_DIR}/${SAFE_SCHEMA}"
+            mkdir -p "${DEST_DIR}"
+            DEST="${DEST_DIR}/${SAFE_TABLE}.jsonl"
+            : > "${DEST}"
+
+            echo "Exporting ${SCHEMA}.${TABLE} -> ${DEST}"
+
+            # пагінація
+            BATCH=${DATA_BATCH:-5000}
+            MAX=${DATA_MAX_ROWS:-1000000}
+            OFFSET=0
+            while [ ${OFFSET} -lt ${MAX} ]; do
+              RESP="$(curl -sS "${URL}/rest/v1/${SAFE_TABLE}?select=*&limit=${BATCH}&offset=${OFFSET}" \
+                -H "apikey: ${KEY}" \
+                -H "Authorization: Bearer ${KEY}" \
+                -H "Accept-Profile: ${SCHEMA}")"
+              COUNT="$(echo "$RESP" | jq 'length')"
+              if [ "${COUNT}" = "0" ] || [ -z "${COUNT}" ]; then
+                break
+              fi
+              echo "$RESP" | jq -c '.[]' >> "${DEST}"
+              OFFSET=$((OFFSET + BATCH))
+              if [ "${COUNT}" -lt "${BATCH}" ]; then break; fi
+            done
+          done
+
       - name: Publish DB inventory to repo root
         shell: bash
         run: |
           mkdir -p db_inventory
           cp "${OUT_DIR}/TABLES.json" db_inventory/tables.json
           cp "${OUT_DIR}/TABLES.md"   db_inventory/tables.md
+          cp "${OUT_DIR}/INDEXES.json" db_inventory/indexes.json || true
+          cp "${OUT_DIR}/FK.json"      db_inventory/fk.json || true
+          cp "${OUT_DIR}/VIEWS.json"   db_inventory/views.json || true
+          cp "${OUT_DIR}/FUNCTIONS.json" db_inventory/functions.json || true
           jq 'length as $n | {table_count:$n, tables:keys|sort}' "${OUT_DIR}/TABLES.json" > db_inventory/summary.json
 
       - name: Generate SBOM (syft)
@@ -95,19 +149,58 @@ jobs:
 
       - name: Make snapshot
         run: |
-          chmod +x scripts/make_snapshot.sh
-          ./scripts/make_snapshot.sh
+          chmod +x scripts/make_snapshot.sh || true
+          if [ -x scripts/make_snapshot.sh ]; then ./scripts/make_snapshot.sh; fi
+
+      - name: Prepare GitHub Pages site
+        shell: bash
+        run: |
+          rm -rf public
+          mkdir -p public/api/db public/api/db_data
+          # індекси
+          cp db_inventory/*.json public/api/db/ || true
+          # ERD
+          cp "${OUT_DIR}/erd.png" public/ || true
+          # дані таблиць
+          rsync -a "${OUT_DIR}/../db_data/" public/api/db_data/ || true
+
+          # простий index
+          cat > public/index.html <<'HTML'
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>AquaStratum Inventory</title>
+          <h1>AquaStratum – Live Inventory</h1>
+          <ul>
+            <li><a href="./api/db/summary.json">DB summary (tables count & names)</a></li>
+            <li><a href="./api/db/tables.json">Tables (columns & PK)</a></li>
+            <li><a href="./api/db/indexes.json">Indexes</a></li>
+            <li><a href="./api/db/fk.json">Foreign Keys</a></li>
+            <li><a href="./api/db/views.json">Views</a></li>
+            <li><a href="./api/db/functions.json">Functions</a></li>
+            <li><a href="./erd.png">ER Diagram (PNG)</a></li>
+            <li><a href="./api/db_data/">Data dump (JSONL per table)</a></li>
+          </ul>
+          HTML
 
       - name: Commit state, SBOM, snapshot & DB inventory
         run: |
-          git add state/ sbom/ snapshots/ db_inventory/
-          git commit -m "chore(introspect): state+SBOM+snapshot+DB inventory for $GITHUB_SHA [skip ci]" || true
+          git add state/ sbom/ snapshots/ db_inventory/ public/
+          git commit -m "chore(introspect): state+SBOM+snapshot+DB inventory+data for $GITHUB_SHA [skip ci]" || true
           git stash push -u -m "temp-introspect" || true
           git pull --rebase origin "${GITHUB_REF_NAME}" || true
           git stash pop || true
           git push origin HEAD:"${GITHUB_REF_NAME}"
 
-      - name: Upload artifacts
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Upload CI artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -117,3 +210,4 @@ jobs:
             sbom/**
             snapshots/*.md
             db_inventory/**
+            public/**
