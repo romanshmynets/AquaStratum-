@@ -23,6 +23,7 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,7 +40,7 @@ jobs:
       - name: Install tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y tree ripgrep universal-ctags postgresql-client jq
+          sudo apt-get install -y tree ripgrep universal-ctags jq
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin v1.16.0
 
       - name: Setup Supabase CLI
@@ -47,35 +48,13 @@ jobs:
         with:
           version: latest
 
-      - name: Validate Supabase secrets
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${SUPABASE_ACCESS_TOKEN:-}" || { echo "Missing SUPABASE_ACCESS_TOKEN"; exit 1; }
-          test -n "${SUPABASE_PROJECT_ID:-}" || { echo "Missing SUPABASE_PROJECT_ID"; exit 1; }
-          test -n "${SUPABASE_DB_PASSWORD:-}" || { echo "Missing SUPABASE_DB_PASSWORD"; exit 1; }
-
-          # Очистити пробіли/лапки
-          CLEAN_REF="$(echo -n "$SUPABASE_PROJECT_ID" | tr -d '\"'\''[:space:]')"
-          if [ "$CLEAN_REF" != "$SUPABASE_PROJECT_ID" ]; then
-            echo "Note: trimmed project ref from '${SUPABASE_PROJECT_ID}' to '${CLEAN_REF}'"
-          fi
-
-          # Перевірка формату: лише малі літери/цифри, довжина 20..32 (CLI різних версій показує 20–24+)
-          if ! echo -n "$CLEAN_REF" | grep -Eq '^[a-z0-9]{20,32}$'; then
-            echo "Invalid SUPABASE_PROJECT_ID format. Please paste the exact 'Project reference' from Supabase (letters+digits, lowercase). Got: '$CLEAN_REF'"
-            exit 1
-          fi
-          echo "SUPABASE_PROJECT_ID looks valid."
-
-          echo "SUPABASE_PROJECT_ID_CLEAN=$CLEAN_REF" >> "$GITHUB_ENV"
-
       - name: Collect project state
         run: |
           chmod +x scripts/collect_state.sh
           ./scripts/collect_state.sh
 
       - name: Dump DB schema via Supabase CLI
+        id: dump
         shell: bash
         run: |
           set -e
@@ -84,12 +63,22 @@ jobs:
           OUT="state/${TS}_${SHA}/db"
           mkdir -p "${OUT}"
 
-          # Авторизація і лінкування
           supabase login "$SUPABASE_ACCESS_TOKEN"
-          supabase link --project-ref "$SUPABASE_PROJECT_ID_CLEAN"
+          supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
-          # Дамп лише схеми (без даних)
-          supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" --schema-only -f "${OUT}/schema.sql" || true
+          # schema-only dump
+          supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" --schema-only -f "${OUT}/schema.sql"
+          echo "OUT_DIR=${OUT}" >> "$GITHUB_ENV"
+
+      - name: Inventory DB tables
+        shell: bash
+        run: |
+          chmod +x scripts/inventory_db.sh
+          scripts/inventory_db.sh "${OUT_DIR}/schema.sql" "${OUT_DIR}"
+
+          # Print short report to Job Summary
+          echo "## DB Tables (from schema dump)" >> $GITHUB_STEP_SUMMARY
+          head -n 200 "${OUT_DIR}/TABLES.md" >> $GITHUB_STEP_SUMMARY || true
 
       - name: Generate SBOM (syft)
         run: |
