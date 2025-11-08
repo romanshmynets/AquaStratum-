@@ -19,11 +19,13 @@ concurrency:
 jobs:
   introspect:
     runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
 
       - name: Mark repo as safe
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -39,20 +41,26 @@ jobs:
           sudo apt-get install -y tree ripgrep universal-ctags postgresql-client
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin v1.16.0
 
-      - name: Export DATABASE_URL (if secret is set)
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: |
-          if [ -n "${DATABASE_URL}" ]; then
-            echo "DATABASE_URL=${DATABASE_URL}" >> $GITHUB_ENV
-          else
-            echo "No DATABASE_URL provided; skipping live DB introspection."
-          fi
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
 
       - name: Collect project state
         run: |
           chmod +x scripts/collect_state.sh
           ./scripts/collect_state.sh
+
+      - name: Dump DB schema via Supabase CLI
+        run: |
+          TS="$(date -u +%Y%m%dT%H%M%SZ)"
+          SHA="$(git rev-parse --short HEAD)"
+          OUT="state/${TS}_${SHA}/db"
+          mkdir -p "${OUT}"
+
+          supabase link --project-ref "$SUPABASE_PROJECT_ID" --no-open
+          # Експорт лише схеми (без даних)
+          supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" --schema-only -f "${OUT}/schema.sql" || true
 
       - name: Generate SBOM (syft)
         run: |
@@ -60,7 +68,6 @@ jobs:
           syft scan dir:. -o json > sbom/packages.json || true
           syft scan dir:. -o spdx-json > sbom/spdx.json || true
 
-      # >>> NEW: also create a repo snapshot inside this workflow <<<
       - name: Make snapshot
         run: |
           chmod +x scripts/make_snapshot.sh
@@ -70,11 +77,10 @@ jobs:
         run: |
           git add state/ sbom/ snapshots/
           if git diff --cached --quiet; then
-            echo "No changes to commit."
+            echo "No changes."
             exit 0
           fi
           git commit -m "chore(introspect): state+SBOM+snapshot for $GITHUB_SHA [skip ci]"
-          # avoid non-fast-forward and unstaged-changes issues
           git stash push -u -m "temp-introspect" || true
           git pull --rebase origin "${GITHUB_REF_NAME}" || true
           git stash pop || true
