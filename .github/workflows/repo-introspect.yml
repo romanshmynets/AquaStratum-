@@ -47,10 +47,8 @@ jobs:
 
       - name: Build file allowlist/denylist
         run: |
-          # Стандартні виключення (можеш редагувати у .github/codeignore)
           cat > .github/codeignore <<'EOF'
           .git/
-          .github/workflows/*.yml     # все одно беремо як код, але можна виключити
           node_modules/
           dist/
           build/
@@ -72,15 +70,11 @@ jobs:
       - name: Generate file tree (human-readable)
         run: |
           set -euo pipefail
-          OUT="$OUT"
-          # Дерево файлів (без прихованих Git службових директорій та наших state/*)
+          EXCLUDES="$(sed 's/[].[^$\\*]/\\&/g' .github/codeignore | paste -sd '|' -)"
           echo "Repository tree (filtered):" > "$OUT/tree.txt"
           printf "\nExcludes:\n" >> "$OUT/tree.txt"
           cat .github/codeignore >> "$OUT/tree.txt"
           printf "\n===========================\n\n" >> "$OUT/tree.txt"
-          # Використовуємо find з фільтрацією по .github/codeignore
-          # Створимо grep-вираз для виключень
-          EXCLUDES="$(sed 's/[].[^$\\*]/\\&/g' .github/codeignore | paste -sd '|' -)"
           if [ -n "$EXCLUDES" ]; then
             find . -type f | grep -Ev "^./($EXCLUDES)" | sed 's|^\./||' | sort >> "$OUT/tree.txt"
           else
@@ -90,7 +84,6 @@ jobs:
       - name: Build JSON inventory (size, sha256, ext, path)
         run: |
           set -euo pipefail
-          OUT="$OUT"
           EXCLUDES="$(sed 's/[].[^$\\*]/\\&/g' .github/codeignore | paste -sd '|' -)"
           TMP="$(mktemp)"
           if [ -n "$EXCLUDES" ]; then
@@ -98,8 +91,6 @@ jobs:
           else
             find . -type f | sed 's|^\./||' | sort > "$TMP"
           fi
-
-          # inventory.json: масив об’єктів по кожному файлу
           {
             echo "["
             first=1
@@ -108,12 +99,10 @@ jobs:
               sz=$(stat -c%s "$f" || echo 0)
               sha=$(sha256sum "$f" | awk '{print $1}')
               ext="${f##*.}"; [ "$ext" = "$f" ] && ext=""
-              # JSON об'єкт
               obj=$(jq -n --arg path "$f" --arg ext "$ext" --arg sha "$sha" --argjson size "$sz" \
                       '{path:$path, ext:$ext, size:$size, sha256:$sha}')
               if [ $first -eq 1 ]; then
-                echo "  $obj"
-                first=0
+                echo "  $obj"; first=0
               else
                 echo "  ,$obj"
               fi
@@ -124,8 +113,6 @@ jobs:
       - name: Language/LOC report (cloc)
         run: |
           set -euo pipefail
-          OUT="$OUT"
-          # cloc працює зі своїм --exclude-dir
           EXCL_DIRS=$(awk -F/ '/\/$/ {print $1}' .github/codeignore | paste -sd, -)
           if [ -n "$EXCL_DIRS" ]; then
             cloc --json --quiet --exclude-dir="$EXCL_DIRS" . > "$OUT/cloc.json" || echo '{}' > "$OUT/cloc.json"
@@ -136,35 +123,53 @@ jobs:
       - name: SBOM (syft dir:.)
         run: |
           set -euo pipefail
-          OUT="$OUT"
           syft dir:. -o json > "$OUT/sbom.json" || echo '{}' > "$OUT/sbom.json"
 
       - name: Build summary.json (counts)
         run: |
           set -euo pipefail
-          OUT="$OUT"
-          TS="$TS"; SHA="$SHA"
           files=$(jq 'length' "$OUT/inventory.json")
           bytes=$(jq '[.[].size] | add // 0' "$OUT/inventory.json")
           langs=$(jq 'del(.header) | length' "$OUT/cloc.json" 2>/dev/null || echo 0)
-          # Топ-10 за розміром
           jq -n \
-            --arg ts "$TS" --arg sha "$SHA" \
-            --argjson files "$files" --argjson bytes "$bytes" --argjson lang_count "$langs" \
+            --arg ts  "$TS" \
+            --arg sha "$SHA" \
+            --argjson files "$files" \
+            --argjson bytes "$bytes" \
+            --argjson lang_count "$langs" \
             --argjson top10 "$(jq 'sort_by(-.size) | .[0:10]' "$OUT/inventory.json")" \
             '{ts:$ts, sha:$sha, files:$files, bytes:$bytes, lang_count:$lang_count, top10:$top10}' \
             > "$OUT/summary.json"
 
-      - name: Publish to repo & Pages
+      - name: Publish snapshot and latest
         run: |
           set -euo pipefail
-          # Копіюємо поточний снапшот у публічний каталог
-          mkdir -p public/api/code
-          LATEST_LINK="public/api/code/latest.json"
-          cp -r "state/${TS}_${SHA}/code" "public/api/code/${TS}_${SHA}"
-          # корисні лінки
-          jq -n --arg path "public/api/code/${TS}_${SHA}" --arg ts "$TS" --arg sha "$SHA" \
-             '{path:$path, ts:$ts, sha:$sha}' > "$LATEST_LINK"
+          SNAP_DIR="public/api/code/${TS}_${SHA}"
+          LATEST_DIR="public/api/code/latest"
+          mkdir -p "$SNAP_DIR" "$LATEST_DIR"
+          cp -r "$OUT/"* "$SNAP_DIR/"
+
+          # оновлюємо latest (стерти і скопіювати заново)
+          rm -rf "$LATEST_DIR"
+          mkdir -p "$LATEST_DIR"
+          cp -r "$OUT/"* "$LATEST_DIR/"
+
+          # оновлюємо index.json: додаємо/оновлюємо запис і latest-вказівник
+          INDEX="public/api/code/index.json"
+          if [ -f "$INDEX" ]; then
+            jq --arg ts "$TS" --arg sha "$SHA" --arg path "$SNAP_DIR" \
+               '.[0] as $i
+                | .snapshots = ( (.snapshots // []) + [{ts:$ts, sha:$sha, path:$path}] )
+                | .snapshots |= (unique_by(.ts) | sort_by(.ts) | reverse)
+                | .latest = {ts:$ts, sha:$sha, path:$path}' \
+               "$INDEX" 2>/dev/null \
+               || jq -n --arg ts "$TS" --arg sha "$SHA" --arg path "$SNAP_DIR" \
+                    '{latest:{ts:$ts,sha:$sha,path:$path},snapshots:[{ts:$ts,sha:$sha,path:$path}]}' \
+               > "$INDEX.tmp" && mv "$INDEX.tmp" "$INDEX"
+          else
+            jq -n --arg ts "$TS" --arg sha "$SHA" --arg path "$SNAP_DIR" \
+              '{latest:{ts:$ts,sha:$sha,path:$path},snapshots:[{ts:$ts,sha:$sha,path:$path}]}' > "$INDEX"
+          fi
 
       - name: Commit & Push
         run: |
