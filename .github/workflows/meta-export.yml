@@ -38,10 +38,8 @@ jobs:
           KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
-
           hdr() {
-            # Accept-Profile важливо: звертаємось до схеми introspect
-            printf -- "-H apikey: %s -H Authorization: Bearer %s -H Accept-Profile: introspect -H Content-Type: application/json" "$KEY" "$KEY"
+            echo "-H apikey: $KEY -H Authorization: Bearer $KEY -H Accept-Profile: introspect -H Content-Type: application/json"
           }
 
           curl -fsS "$URL/rest/v1/rpc/tables"  $(hdr) -d '{}' > "$OUT/tables.json"
@@ -58,12 +56,11 @@ jobs:
           KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
-          # Доступ до системних вьюх через профіль postgres (Accept-Profile: postgres)
           curl -fsS "$URL/rest/v1/pg_policy?select=oid,polname,polrelid,polcmd,polpermissive,polroles,polqual,polwithcheck" \
-              -H "apikey: $KEY" \
-              -H "Authorization: Bearer $KEY" \
-              -H "Accept-Profile: postgres" \
-              -H "Content-Type: application/json" > "$OUT/rls_policies.json"
+            -H "apikey: $KEY" \
+            -H "Authorization: Bearer $KEY" \
+            -H "Accept-Profile: postgres" \
+            -H "Content-Type: application/json" > "$OUT/rls_policies.json"
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
@@ -80,10 +77,10 @@ jobs:
           VIEWS=$(jq 'length' "$OUT/views.json")
           RLS=$(jq 'length' "$OUT/rls_policies.json")
 
-          # Перші 30 таблиць списком
           jq -r '.[0:30] | map("\(.table_schema).\(.table_name)") | @tsv' "$OUT/tables.json" \
             | sed 's/^/- /' > "$OUT/tables_top30.md"
 
+          mkdir -p "state/${TS}"
           cat > "state/${TS}/summary.md" <<EOF
 # AquaStratum – Inventory Snapshot (${TS})
 
@@ -108,5 +105,5 @@ EOF
           git config user.name  "meta-export-bot"
           git config user.email "meta-export-bot@users.noreply.github.com"
           git add state/${TS}
-          git commit -m "meta-export: snapshot ${TS} via REST RPC [skip ci]" || echo "Nothing to commit"
+          git commit -m "meta-export snapshot ${TS} via REST RPC [skip ci]" || echo "Nothing to commit"
           git push origin HEAD:main
