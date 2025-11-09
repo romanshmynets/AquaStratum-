@@ -15,16 +15,30 @@ permissions:
 jobs:
   meta_export:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # Очікуються secrets:
+      #  - SUPABASE_URL
+      #  - SUPABASE_SERVICE_ROLE_KEY
+      #  - INTROSPECT_PROFILE (необов'язково, за замовчуванням "introspect")
+      INTROSPECT_PROFILE: ${{ secrets.INTROSPECT_PROFILE || 'introspect' }}
 
     steps:
+      - name: Set up job
+        run: echo "Starting meta export…"
+
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install tools
+        shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update -y
-          sudo apt-get install -y jq curl
+          sudo apt-get update
+          sudo apt-get install -y jq curl graphviz
 
       - name: Init snapshot vars
         id: init
@@ -32,82 +46,101 @@ jobs:
         run: |
           set -euo pipefail
           TS="$(date -u +%Y%m%dT%H%M%SZ)"
-          SHA="$(git rev-parse --short HEAD || echo 'no-git')"
-          OUT="state/${TS}/meta"
-          mkdir -p "$OUT"
-          echo "TS=$TS"   >> "$GITHUB_ENV"
-          echo "SHA=$SHA" >> "$GITHUB_ENV"
-          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          SHA="$(git rev-parse --short HEAD)"
+          ROOT="${GITHUB_WORKSPACE}"
+          OUT_DIR="state/${TS}"
+          META_DIR="${OUT_DIR}/meta"
+          RPC_DIR="${OUT_DIR}/rpc"
+          mkdir -p "${META_DIR}" "${RPC_DIR}"
+          echo "TS=${TS}"           >> "$GITHUB_ENV"
+          echo "SHA=${SHA}"         >> "$GITHUB_ENV"
+          echo "OUT_DIR=${OUT_DIR}" >> "$GITHUB_ENV"
+          echo "META_DIR=${META_DIR}" >> "$GITHUB_ENV"
+          echo "RPC_DIR=${RPC_DIR}" >> "$GITHUB_ENV"
 
       - name: Fetch dictionaries via REST (introspect profile)
+        shell: bash
         env:
           URL: ${{ secrets.SUPABASE_URL }}
           KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        shell: bash
+          PROFILE: ${{ env.INTROSPECT_PROFILE }}
         run: |
           set -euo pipefail
-          OUT="${OUT:?}"
-          hdr="-H apikey:${KEY} -H Authorization: Bearer ${KEY} -H Accept-Profile:introspect -H Content-Type: application/json"
 
-          fetch() {
-            local endpoint="$1"
-            local file="$OUT/$2.json"
-            echo "Fetching $endpoint → $file"
-            if ! curl -fsS ${hdr} "${URL}/rest/v1/rpc/${endpoint}" -d '{}' > "$file"; then
-              echo "[]"> "$file"
-              echo "Warning: RPC ${endpoint} unavailable"
+          hdr=("-H" "apikey: ${KEY}" "-H" "Authorization: Bearer ${KEY}" "-H" "Accept-Profile: ${PROFILE}" "-H" "Content-Type: application/json")
+
+          # Безпечний запит: якщо API вернув помилку-об’єкт, збережемо в *_error.json,
+          # а основний файл залишимо валідним пустим масивом, щоб збірка не падала.
+          api() {
+            local path="$1" out="$2"
+            if curl -sS "${hdr[@]}" "${URL}${path}" -o "${out}.raw" -w "%{http_code}" | grep -qE "^(200|204)$"; then
+              # Якщо прийшла одна сутність-об'єкт, загорнемо в масив
+              if jq -e 'type=="array"' "${out}.raw" >/dev/null 2>&1; then
+                jq '.' "${out}.raw" > "${out}"
+              else
+                jq -c 'if type=="object" then [.] else . end' "${out}.raw" > "${out}"
+              fi
+              rm -f "${out}.raw"
+            else
+              mv "${out}.raw" "${out%.json}_error.json" || true
+              echo "[]" > "${out}"
             fi
           }
 
-          fetch tables   tables
-          fetch columns  columns
-          fetch pks      pks
-          fetch fks      fks
-          fetch indexes  indexes
-          fetch views    views
-          fetch rls_policies rls_policies
+          # основні словники з нашого introspect API
+          mkdir -p "${RPC_DIR}"
+          api "/rest/v1/rpc/tables"  "${RPC_DIR}/tables.json"
+          api "/rest/v1/rpc/columns" "${RPC_DIR}/columns.json"
+          api "/rest/v1/rpc/pks"     "${RPC_DIR}/pks.json"
+          api "/rest/v1/rpc/fks"     "${RPC_DIR}/fks.json"
+          api "/rest/v1/rpc/indexes" "${RPC_DIR}/indexes.json"
+          api "/rest/v1/rpc/views"   "${RPC_DIR}/views.json"
 
-      - name: Build summary
+      - name: Build summary (policies & dictionary)
         shell: bash
         run: |
           set -euo pipefail
-          OUT="${OUT:?}"
 
-          # sanitize any object→array if bad response
-          for f in tables columns pks fks indexes views rls_policies; do
-            jq 'if type=="array" then . else [] end' "$OUT/${f}.json" > "$OUT/${f}.tmp" && mv "$OUT/${f}.tmp" "$OUT/${f}.json"
-          done
+          # Збирання таблиці зі схемою -> таблиця та кількістю стовпчиків
+          jq -n \
+            --slurpfile t "${RPC_DIR}/tables.json" \
+            --slurpfile c "${RPC_DIR}/columns.json" \
+            '{
+               table_count: ($t[0]|length),
+               column_count: ($c[0]|length),
+               tables: ($t[0] | map({schema_name, table_name}))
+             }' > "${META_DIR}/dictionary.json"
 
-          TABS=$(jq 'length'        "${OUT}/tables.json")
-          COLS=$(jq 'length'        "${OUT}/columns.json")
-          PKS=$(jq 'length'         "${OUT}/pks.json")
-          FKS=$(jq 'length'         "${OUT}/fks.json")
-          INDX=$(jq 'length'        "${OUT}/indexes.json")
-          VIEWS=$(jq 'length'       "${OUT}/views.json")
-          RLS=$(jq 'length'         "${OUT}/rls_policies.json")
+          # Компактне summary для README / Pages
+          jq -n \
+            --slurpfile t "${RPC_DIR}/tables.json" \
+            --slurpfile v "${RPC_DIR}/views.json" \
+            --slurpfile p "${RPC_DIR}/pks.json" \
+            --slurpfile f "${RPC_DIR}/fks.json" \
+            --slurpfile i "${RPC_DIR}/indexes.json" \
+            '{
+              stats: {
+                tables: ($t[0]|length),
+                views:  ($v[0]|length),
+                pks:    ($p[0]|length),
+                fks:    ($f[0]|length),
+                indexes:($i[0]|length)
+              }
+            }' > "${OUT_DIR}/summary.json"
 
-          jq -r '.[0:30] | map("\(.table_schema).\(.table_name)") | @tsv' "${OUT}/tables.json" \
-            | sed 's/^/- /' > "${OUT}/tables_top30.md" || echo "- no tables -" > "${OUT}/tables_top30.md"
-
-          mkdir -p "state/${TS}"
+          # Markdown-зведення
           {
-            echo "# AquaStratum – Meta Snapshot (${TS})"
-            echo ""
-            echo "Commit: ${SHA}"
-            echo ""
-            echo "## Counters"
-            echo "- Tables:  ${TABS}"
-            echo "- Columns: ${COLS}"
-            echo "- PKs:     ${PKS}"
-            echo "- FKs:     ${FKS}"
-            echo "- Indexes: ${INDX}"
-            echo "- Views:   ${VIEWS}"
-            echo "- RLS policies: ${RLS}"
-            echo ""
-            echo "## Sample tables (first 30)"
-            cat  "${OUT}/tables_top30.md"
-            echo ""
-          } > "state/${TS}/summary.md"
+            echo "# Meta Export Snapshot"
+            echo
+            echo "- Timestamp (UTC): ${TS}"
+            echo "- Commit: ${SHA}"
+            echo
+            echo "## Stats"
+            jq -r '.stats | to_entries[] | "- \(.key): \(.value)"' "${OUT_DIR}/summary.json"
+            echo
+            echo "## Tables (first 20)"
+            jq -r '.tables[:20] | map("- \(.schema_name).\(.table_name)")[]' "${META_DIR}/dictionary.json"
+          } > "${OUT_DIR}/summary.md"
 
       - name: Commit & Push snapshot
         env:
@@ -117,8 +150,14 @@ jobs:
           set -euo pipefail
           git config user.name  "meta-export-bot"
           git config user.email "meta-export-bot@users.noreply.github.com"
-          git add "state/${TS}"
+
+          # Додаємо snapshot
+          git add "${OUT_DIR}"
           git commit -m "meta-export snapshot ${TS} (${SHA}) [skip ci]" || echo "Nothing to commit"
+
+          # Безпечний push (враховує паралельні зміни у main)
+          git fetch origin main
+          git rebase origin/main || true
           git push origin HEAD:main
 
       - name: Upload Pages artifact
