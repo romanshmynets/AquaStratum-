@@ -1,7 +1,7 @@
 {
   "snapshot": {
-    "ts": "20251109T120107Z",
-    "sha": "db6ff13bd1a7"
+    "ts": "20251109T125518Z",
+    "sha": "ca5e113df1b2"
   },
   "sources": {
     "code": "public/api/code/latest",
@@ -10,9 +10,9 @@
   },
   "code": {
     "summary": {
-      "ts": "20251109T115623Z",
-      "files": 827,
-      "bytes": 9404636
+      "ts": "20251109T120126Z",
+      "files": 904,
+      "bytes": 10044468
     },
     "inventory": [
       {
@@ -67,8 +67,8 @@
       },
       {
         "path": ".github/workflows/build-master-snapshot.yml",
-        "bytes": 5516,
-        "sha1": "ccf00732220b246a12b7304bf82f94c2887e0cc5"
+        "bytes": 5593,
+        "sha1": "d38d03db6ff2875fbe91bfff3d14e3a4bad43f82"
       },
       {
         "path": ".github/workflows/publish-data.yml",
@@ -321,6 +321,11 @@
         "sha1": "7db161f29735b5ee00c55ff486849fa2d7292562"
       },
       {
+        "path": "snapshots/20251109T115600Z_fb82964.md",
+        "bytes": 145228,
+        "sha1": "4779db2bc3e98d1831ccd96323bbb93a7a5facdd"
+      },
+      {
         "path": "snapshots/20251108T063350Z_9583123.md",
         "bytes": 37980,
         "sha1": "124a74d4b29aef8dbbae25ed1ddfc127316988f1"
@@ -474,6 +479,41 @@
         "path": "public/api/db/functions.json",
         "bytes": 5,
         "sha1": "f69593cfcc6a1fbe47b403e08e047420af795491"
+      },
+      {
+        "path": "public/api/db/snapshots/20251109T115610Z/indexes.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "public/api/db/snapshots/20251109T115610Z/summary.json",
+        "bytes": 88,
+        "sha1": "a885d8db97e4c2b0618c3c665e5b0ac4bc03500f"
+      },
+      {
+        "path": "public/api/db/snapshots/20251109T115610Z/columns.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "public/api/db/snapshots/20251109T115610Z/tables.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "public/api/db/snapshots/20251109T115610Z/views.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "public/api/db/snapshots/20251109T115610Z/fks.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "public/api/db/snapshots/20251109T115610Z/pks.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
       },
       {
         "path": "public/api/db/snapshots/20251109T114633Z/indexes.json",
@@ -656,6 +696,36 @@
         "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
       },
       {
+        "path": "public/api/meta/snapshots/20251109T115614Z/rls_policies.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "public/api/meta/snapshots/20251109T115614Z/columns.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "public/api/meta/snapshots/20251109T115614Z/dictionary.json",
+        "bytes": 62,
+        "sha1": "55f78f54d196b7ef67a06c5418ef8ede83654411"
+      },
+      {
+        "path": "public/api/meta/snapshots/20251109T115614Z/tables.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "public/api/meta/snapshots/20251109T115614Z/fks.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "public/api/meta/snapshots/20251109T115614Z/pks.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
         "path": "public/api/meta/latest/rls_policies.json",
         "bytes": 3,
         "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
@@ -809,6 +879,126 @@
         "path": "public/api/code/20251109T050841Z_ca0bf11/inventory.json",
         "bytes": 3759,
         "sha1": "257b6b3d2a030358e433967b57e093d9b7c56981"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/cloc.json",
+        "bytes": 970,
+        "sha1": "8e619d517e6b2cdb1205c646a60a21d81b22887d"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/tree.txt",
+        "bytes": 50596,
+        "sha1": "f9eb9bf2aaafa7b4745e3700d3cc61e3018a17ac"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/summary.json",
+        "bytes": 67,
+        "sha1": "a944aae1392525646b992b7f30c08105151565e1"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/sbom.json",
+        "bytes": 137,
+        "sha1": "1eebf80f3412733d4903f262de2aa89c9eab7cc8"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/inventory.json",
+        "bytes": 120038,
+        "sha1": "4b3690506828f273971a95f8a08cf1932a80cadd"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/source.zip",
+        "bytes": 19706,
+        "sha1": "3296a48f89a65308e26c4b412b5cc008e642ef08"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/schema.sql",
+        "bytes": 933,
+        "sha1": "f3ee8f69e93472b698535047115b204081fcaedf"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/scripts/collect_state.sh",
+        "bytes": 3300,
+        "sha1": "f0a9b93fbb4d893b02f124f0ae4bb7cc3566e44f"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/scripts/erd_from_schema.sh",
+        "bytes": 1090,
+        "sha1": "9d9d13cbda225f72d57d8bbe5f2efc5c142e30ec"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/scripts/make_snapshot.sh",
+        "bytes": 1538,
+        "sha1": "ecd8290ed57875e0293edf907b6e92b5e98633bb"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/scripts/inventory_db.sh",
+        "bytes": 7057,
+        "sha1": "567a89b9ac9a8c9afec93b2b04d23a64a0eebe10"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/workflows/meta-export.yml",
+        "bytes": 3334,
+        "sha1": "6c4aabec1377dc833a9de3b3ad50dccf10ce9b35"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/workflows/repo-introspect.yml",
+        "bytes": 3625,
+        "sha1": "a9d738dc63456b2460636782e394e5e6099f5620"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/workflows/migrate.yml",
+        "bytes": 1712,
+        "sha1": "931d5805d4644ba434b846fea5bd65bf72eafcca"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/workflows/introspect.yml",
+        "bytes": 3349,
+        "sha1": "9b5e4f62adcdeeb927f94ffbd89ea1f69d0adc4b"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/workflows/build-master-snapshot.yml",
+        "bytes": 5516,
+        "sha1": "ccf00732220b246a12b7304bf82f94c2887e0cc5"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/workflows/publish-data.yml",
+        "bytes": 1032,
+        "sha1": "924d1ce9048554a6970394b684921de2766d3c8b"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/workflows/pages-index.yml",
+        "bytes": 2514,
+        "sha1": "e2961337592cc2217ad6dcd7c2fdcf66a4b0c3c2"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/workflows/static.yml",
+        "bytes": 1250,
+        "sha1": "485b1f1959a63492bce55ce1a0433e767c39483f"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/workflows/snapshot.yml",
+        "bytes": 1434,
+        "sha1": "903f7848f87a461bc324a592ac9345a6672f1b1f"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/workflows/meta-export-debug.yml",
+        "bytes": 558,
+        "sha1": "82534d2662c855f81734c87dc3394efaa8badf84"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/supabase/migrations/00000000000000_init.sql",
+        "bytes": 618,
+        "sha1": "05698681099ec08999c628ef9b37fd5df1e41551"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/supabase/migrations/20251108_introspect_rpc.sql",
+        "bytes": 4643,
+        "sha1": "5737f8f8af1e3dbf0b05316cedd548f35dc99be4"
+      },
+      {
+        "path": "public/api/code/snapshots/20251109T115623Z/raw/seed.sql",
+        "bytes": 116,
+        "sha1": "fd1fd90d084a84073a06f5f0cba13811c077361c"
       },
       {
         "path": "public/api/code/snapshots/20251109T114447Z/cloc.json",
@@ -1363,32 +1553,32 @@
       {
         "path": "public/api/code/latest/cloc.json",
         "bytes": 970,
-        "sha1": "0d77467aa6fea50b87bd5ac4cb9252b1e423498f"
+        "sha1": "8e619d517e6b2cdb1205c646a60a21d81b22887d"
       },
       {
         "path": "public/api/code/latest/tree.txt",
-        "bytes": 46138,
-        "sha1": "98b4402f71709c9d1b80cfd8f9999de3a1d544d0"
+        "bytes": 50596,
+        "sha1": "f9eb9bf2aaafa7b4745e3700d3cc61e3018a17ac"
       },
       {
         "path": "public/api/code/latest/summary.json",
         "bytes": 67,
-        "sha1": "9bc77bd0beb96366bd9c7ec6409f2fd0d6d68809"
+        "sha1": "a944aae1392525646b992b7f30c08105151565e1"
       },
       {
         "path": "public/api/code/latest/sbom.json",
         "bytes": 137,
-        "sha1": "416ff57b78e7c200fd3255bd32695a40c9000b4f"
+        "sha1": "1eebf80f3412733d4903f262de2aa89c9eab7cc8"
       },
       {
         "path": "public/api/code/latest/inventory.json",
-        "bytes": 110569,
-        "sha1": "76b2ea5a9a83cf73b05e7797e05224ce18024879"
+        "bytes": 120038,
+        "sha1": "4b3690506828f273971a95f8a08cf1932a80cadd"
       },
       {
         "path": "public/api/code/latest/source.zip",
-        "bytes": 18795,
-        "sha1": "03ce4ad1dc73f6c67dcfcf0a54750186a854cf85"
+        "bytes": 19706,
+        "sha1": "3296a48f89a65308e26c4b412b5cc008e642ef08"
       },
       {
         "path": "public/api/code/latest/raw/schema.sql",
@@ -1444,6 +1634,11 @@
         "path": "public/api/code/latest/raw/workflows/publish-data.yml",
         "bytes": 1032,
         "sha1": "924d1ce9048554a6970394b684921de2766d3c8b"
+      },
+      {
+        "path": "public/api/code/latest/raw/workflows/pages-index.yml",
+        "bytes": 2514,
+        "sha1": "e2961337592cc2217ad6dcd7c2fdcf66a4b0c3c2"
       },
       {
         "path": "public/api/code/latest/raw/workflows/static.yml",
@@ -1514,6 +1709,11 @@
         "path": "public/index.html",
         "bytes": 616,
         "sha1": "44b8059ad7def5a51cae21a8252ee46c088a5c10"
+      },
+      {
+        "path": "public/index.json",
+        "bytes": 1129,
+        "sha1": "d3a971e0ebf80287684a711e18a2fc3af469c703"
       },
       {
         "path": ".editorconfig",
@@ -1626,14 +1826,124 @@
         "sha1": "7c7531870dd8887681e4ba85cdac8eb70392b9d5"
       },
       {
+        "path": "state/20251109T115623Z/code/cloc.json",
+        "bytes": 970,
+        "sha1": "8e619d517e6b2cdb1205c646a60a21d81b22887d"
+      },
+      {
         "path": "state/20251109T115623Z/code/tree.txt",
         "bytes": 50596,
         "sha1": "f9eb9bf2aaafa7b4745e3700d3cc61e3018a17ac"
       },
       {
+        "path": "state/20251109T115623Z/code/summary.json",
+        "bytes": 67,
+        "sha1": "a944aae1392525646b992b7f30c08105151565e1"
+      },
+      {
+        "path": "state/20251109T115623Z/code/sbom.json",
+        "bytes": 137,
+        "sha1": "1eebf80f3412733d4903f262de2aa89c9eab7cc8"
+      },
+      {
         "path": "state/20251109T115623Z/code/inventory.json",
-        "bytes": 0,
-        "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+        "bytes": 120038,
+        "sha1": "4b3690506828f273971a95f8a08cf1932a80cadd"
+      },
+      {
+        "path": "state/20251109T115623Z/code/source.zip",
+        "bytes": 19706,
+        "sha1": "3296a48f89a65308e26c4b412b5cc008e642ef08"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/schema.sql",
+        "bytes": 933,
+        "sha1": "f3ee8f69e93472b698535047115b204081fcaedf"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/scripts/collect_state.sh",
+        "bytes": 3300,
+        "sha1": "f0a9b93fbb4d893b02f124f0ae4bb7cc3566e44f"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/scripts/erd_from_schema.sh",
+        "bytes": 1090,
+        "sha1": "9d9d13cbda225f72d57d8bbe5f2efc5c142e30ec"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/scripts/make_snapshot.sh",
+        "bytes": 1538,
+        "sha1": "ecd8290ed57875e0293edf907b6e92b5e98633bb"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/scripts/inventory_db.sh",
+        "bytes": 7057,
+        "sha1": "567a89b9ac9a8c9afec93b2b04d23a64a0eebe10"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/workflows/meta-export.yml",
+        "bytes": 3334,
+        "sha1": "6c4aabec1377dc833a9de3b3ad50dccf10ce9b35"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/workflows/repo-introspect.yml",
+        "bytes": 3625,
+        "sha1": "a9d738dc63456b2460636782e394e5e6099f5620"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/workflows/migrate.yml",
+        "bytes": 1712,
+        "sha1": "931d5805d4644ba434b846fea5bd65bf72eafcca"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/workflows/introspect.yml",
+        "bytes": 3349,
+        "sha1": "9b5e4f62adcdeeb927f94ffbd89ea1f69d0adc4b"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/workflows/build-master-snapshot.yml",
+        "bytes": 5516,
+        "sha1": "ccf00732220b246a12b7304bf82f94c2887e0cc5"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/workflows/publish-data.yml",
+        "bytes": 1032,
+        "sha1": "924d1ce9048554a6970394b684921de2766d3c8b"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/workflows/pages-index.yml",
+        "bytes": 2514,
+        "sha1": "e2961337592cc2217ad6dcd7c2fdcf66a4b0c3c2"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/workflows/static.yml",
+        "bytes": 1250,
+        "sha1": "485b1f1959a63492bce55ce1a0433e767c39483f"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/workflows/snapshot.yml",
+        "bytes": 1434,
+        "sha1": "903f7848f87a461bc324a592ac9345a6672f1b1f"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/workflows/meta-export-debug.yml",
+        "bytes": 558,
+        "sha1": "82534d2662c855f81734c87dc3394efaa8badf84"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/supabase/migrations/00000000000000_init.sql",
+        "bytes": 618,
+        "sha1": "05698681099ec08999c628ef9b37fd5df1e41551"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/supabase/migrations/20251108_introspect_rpc.sql",
+        "bytes": 4643,
+        "sha1": "5737f8f8af1e3dbf0b05316cedd548f35dc99be4"
+      },
+      {
+        "path": "state/20251109T115623Z/code/raw/seed.sql",
+        "bytes": 116,
+        "sha1": "fd1fd90d084a84073a06f5f0cba13811c077361c"
       },
       {
         "path": "state/20251108T040448Z_e5a9262/env/guessed.env.example",
@@ -3446,6 +3756,16 @@
         "sha1": "f1d35abea6232677a00a7df175c71fcc34a2a28f"
       },
       {
+        "path": "state/20251109T120126Z/code/tree.txt",
+        "bytes": 56010,
+        "sha1": "9d4e686991416eee185a202918d50d662580310c"
+      },
+      {
+        "path": "state/20251109T120126Z/code/inventory.json",
+        "bytes": 0,
+        "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+      },
+      {
         "path": "state/20251108T063348Z_2a22f4a/db/schema.sql",
         "bytes": 933,
         "sha1": "f3ee8f69e93472b698535047115b204081fcaedf"
@@ -3581,6 +3901,36 @@
         "sha1": "e91017aaf4cd83e853038b2228e5023a3925059e"
       },
       {
+        "path": "state/20251109T115614Z/meta/rls_policies.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "state/20251109T115614Z/meta/columns.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "state/20251109T115614Z/meta/dictionary.json",
+        "bytes": 62,
+        "sha1": "55f78f54d196b7ef67a06c5418ef8ede83654411"
+      },
+      {
+        "path": "state/20251109T115614Z/meta/tables.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "state/20251109T115614Z/meta/fks.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "state/20251109T115614Z/meta/pks.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
         "path": "state/20251109T052210Z_659a611/db/schema.sql",
         "bytes": 62770,
         "sha1": "da896f2ca620b92328a3f4a68513296634654aad"
@@ -3644,6 +3994,41 @@
         "path": "state/20251109T052321Z_659a611/code/inventory.json",
         "bytes": 3759,
         "sha1": "f573e9ae06bc06b4097fb54dcd05ae9ae66430b1"
+      },
+      {
+        "path": "state/20251109T115610Z/db/indexes.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "state/20251109T115610Z/db/summary.json",
+        "bytes": 88,
+        "sha1": "a885d8db97e4c2b0618c3c665e5b0ac4bc03500f"
+      },
+      {
+        "path": "state/20251109T115610Z/db/columns.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "state/20251109T115610Z/db/tables.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "state/20251109T115610Z/db/views.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "state/20251109T115610Z/db/fks.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
+      },
+      {
+        "path": "state/20251109T115610Z/db/pks.json",
+        "bytes": 3,
+        "sha1": "cd0d4cc32346750408f7d4f5e78ec9a6e5b79a0d"
       },
       {
         "path": "state/20251109T035945Z_9c06b14/db/schema.sql",
@@ -4155,29 +4540,29 @@
       "header": {
         "cloc_url": "github.com/AlDanial/cloc",
         "cloc_version": "1.98",
-        "elapsed_seconds": 0.263299942016602,
-        "n_files": 264,
-        "n_lines": 75360,
-        "files_per_second": 1002.65878517875,
-        "lines_per_second": 286213.507769206
+        "elapsed_seconds": 0.33606219291687,
+        "n_files": 272,
+        "n_lines": 83216,
+        "files_per_second": 809.3739960427,
+        "lines_per_second": 247620.832554005
       },
       "Markdown": {
-        "nFiles": 88,
-        "blank": 407,
+        "nFiles": 89,
+        "blank": 413,
         "comment": 0,
-        "code": 37761
+        "code": 39651
       },
       "JSON": {
-        "nFiles": 89,
+        "nFiles": 94,
         "blank": 2,
         "comment": 0,
-        "code": 20302
+        "code": 24920
       },
       "Text": {
-        "nFiles": 63,
-        "blank": 35,
+        "nFiles": 64,
+        "blank": 36,
         "comment": 0,
-        "code": 12413
+        "code": 13592
       },
       "SQL": {
         "nFiles": 6,
@@ -4186,10 +4571,10 @@
         "code": 1436
       },
       "YAML": {
-        "nFiles": 12,
-        "blank": 133,
-        "comment": 46,
-        "code": 834
+        "nFiles": 13,
+        "blank": 156,
+        "comment": 47,
+        "code": 972
       },
       "Bourne Shell": {
         "nFiles": 4,
@@ -4210,16 +4595,16 @@
         "code": 8
       },
       "SUM": {
-        "blank": 2194,
-        "comment": 84,
-        "code": 73082,
-        "nFiles": 264
+        "blank": 2224,
+        "comment": 85,
+        "code": 80907,
+        "nFiles": 272
       }
     },
     "sbom": {
-      "timestamp": "20251109T115623Z",
+      "timestamp": "20251109T120126Z",
       "components": {
-        "repo_files": 827
+        "repo_files": 904
       },
       "notes": "Replace with Syft/CycloneDX if required"
     },
