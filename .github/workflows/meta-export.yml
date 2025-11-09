@@ -1,117 +1,112 @@
-name: Meta Export (RLS Policies & Data Dictionary)
+name: Meta Export (REST RPC)
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ "main" ]
-
-permissions:
-  contents: write
+    branches: [ main ]
+    paths:
+      - ".github/workflows/meta-export.yml"
+      - "sql/**"
+  workflow_dispatch:
 
 jobs:
   meta_export:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install tools
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y jq postgresql-client
-
-      - name: Prepare output dirs
-        run: mkdir -p public/api/db
-
-      - name: Check connection
-        shell: bash
-        run: |
-          set -e
-          echo "🔗 Testing connection..."
-          psql "$DATABASE_URL" -c "select now();" || (echo "❌ Cannot connect to database" && exit 1)
-
-      - name: Export RLS Policies
-        shell: bash
-        continue-on-error: true
+      - name: Prepare dirs
         run: |
           set -euo pipefail
-          echo "🟢 Exporting RLS policies..."
-          if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At -c "
-            with p as (
-              select n.nspname as schema_name,
-                     c.relname as table_name,
-                     pol.polname as policy_name,
-                     pol.polcmd as command,
-                     pol.polroles::text as roles,
-                     pg_get_expr(pol.polqual, pol.polrelid) as using_expr,
-                     pg_get_expr(pol.polwithcheck, pol.polrelid) as check_expr
-              from pg_policy pol
-              join pg_class c on c.oid = pol.polrelid
-              join pg_namespace n on n.oid = c.relnamespace
-              where n.nspname not in ('pg_catalog','information_schema')
-            )
-            select coalesce(jsonb_pretty(jsonb_agg(
-              jsonb_build_object(
-                'schema', schema_name,
-                'table',  table_name,
-                'policy', policy_name,
-                'command', command,
-                'roles', roles,
-                'using', using_expr,
-                'check', check_expr
-              )
-            )), '[]') from p;
-          " > public/api/db/policies.json; then
-            echo "⚠️ Warning: failed to export RLS policies"
-            echo "[]" > public/api/db/policies.json
-          fi
+          TS="$(date -u +%Y%m%dT%H%M%SZ)"
+          OUT="state/${TS}/rpc"
+          mkdir -p "$OUT"
+          echo "TS=$TS" >> "$GITHUB_ENV"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
 
-      - name: Export Data Dictionary
+      - name: Fetch RPC JSON (tables/columns/pks/fks/indexes/views)
         shell: bash
-        continue-on-error: true
+        env:
+          URL: ${{ secrets.SUPABASE_URL }}
+          KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
-          echo "🟢 Exporting Data Dictionary..."
-          if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At -c "
-            with cols as (
-              select table_schema, table_name, column_name, data_type, is_nullable, column_default
-              from information_schema.columns
-              where table_schema not in ('pg_catalog','information_schema')
-            )
-            select coalesce(jsonb_pretty(jsonb_agg(
-              jsonb_build_object(
-                'schema', table_schema,
-                'table', table_name,
-                'column', column_name,
-                'type', data_type,
-                'nullable', is_nullable,
-                'default', column_default
-              )
-            )), '[]') from cols;
-          " > public/api/db/datadict.json; then
-            echo "⚠️ Warning: failed to export Data Dictionary"
-            echo "[]" > public/api/db/datadict.json
-          fi
 
-      - name: Render Markdown summary
+          hdr() {
+            # Accept-Profile важливо: звертаємось до схеми introspect
+            printf -- "-H apikey: %s -H Authorization: Bearer %s -H Accept-Profile: introspect -H Content-Type: application/json" "$KEY" "$KEY"
+          }
+
+          curl -fsS "$URL/rest/v1/rpc/tables"  $(hdr) -d '{}' > "$OUT/tables.json"
+          curl -fsS "$URL/rest/v1/rpc/columns" $(hdr) -d '{}' > "$OUT/columns.json"
+          curl -fsS "$URL/rest/v1/rpc/pks"     $(hdr) -d '{}' > "$OUT/pks.json"
+          curl -fsS "$URL/rest/v1/rpc/fks"     $(hdr) -d '{}' > "$OUT/fks.json"
+          curl -fsS "$URL/rest/v1/rpc/indexes" $(hdr) -d '{}' > "$OUT/indexes.json"
+          curl -fsS "$URL/rest/v1/rpc/views"   $(hdr) -d '{}' > "$OUT/views.json"
+
+      - name: Export RLS policies (READ-ONLY via REST)
         shell: bash
+        env:
+          URL: ${{ secrets.SUPABASE_URL }}
+          KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          echo "# Data Dictionary" > public/api/db/datadict.md
-          jq -r '
-            .[] | "## " + .schema + "." + .table + "\n" +
-            "- **Column:** " + .column + "\n" +
-            "- **Type:** " + .type + "\n" +
-            "- **Nullable:** " + .nullable + "\n" +
-            "- **Default:** " + (.default // "") + "\n"
-          ' public/api/db/datadict.json >> public/api/db/datadict.md || echo "_Empty_"
+          set -euo pipefail
+          # Доступ до системних вьюх через профіль postgres (Accept-Profile: postgres)
+          curl -fsS "$URL/rest/v1/pg_policy?select=oid,polname,polrelid,polcmd,polpermissive,polroles,polqual,polwithcheck" \
+              -H "apikey: $KEY" \
+              -H "Authorization: Bearer $KEY" \
+              -H "Accept-Profile: postgres" \
+              -H "Content-Type: application/json" > "$OUT/rls_policies.json"
 
-      - name: Commit & Push results
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Build summary
         run: |
-          git config user.name "meta-export-bot"
+          set -euo pipefail
+          OUT="${OUT:?}"
+          TABS=$(jq 'length' "$OUT/tables.json")
+          COLS=$(jq 'length' "$OUT/columns.json")
+          PKS=$(jq 'length' "$OUT/pks.json")
+          FKS=$(jq 'length' "$OUT/fks.json")
+          INDX=$(jq 'length' "$OUT/indexes.json")
+          VIEWS=$(jq 'length' "$OUT/views.json")
+          RLS=$(jq 'length' "$OUT/rls_policies.json")
+
+          # Перші 30 таблиць списком
+          jq -r '.[0:30] | map("\(.table_schema).\(.table_name)") | @tsv' "$OUT/tables.json" \
+            | sed 's/^/- /' > "$OUT/tables_top30.md"
+
+          cat > "state/${TS}/summary.md" <<EOF
+# AquaStratum – Inventory Snapshot (${TS})
+
+## Counters
+- Tables: ${TABS}
+- Columns: ${COLS}
+- PKs: ${PKS}
+- FKs: ${FKS}
+- Indexes: ${INDX}
+- Views: ${VIEWS}
+- RLS policies: ${RLS}
+
+## Sample tables (first 30)
+$(cat "$OUT/tables_top30.md")
+EOF
+
+      - name: Commit & Push
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name  "meta-export-bot"
           git config user.email "meta-export-bot@users.noreply.github.com"
-          git add public/api/db/policies.json public/api/db/datadict.json public/api/db/datadict.md
-          git commit -m "chore: update meta export [skip ci]" || echo "No changes to commit"
-          git push origin HEAD:"${GITHUB_REF_NAME:-main}" || true
+          git add state/${TS}
+          git commit -m "meta-export: snapshot ${TS} via REST RPC [skip ci]" || echo "Nothing to commit"
+          git push origin HEAD:main
