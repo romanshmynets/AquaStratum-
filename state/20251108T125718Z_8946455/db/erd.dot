@@ -1,5 +1,0 @@
-digraph ERD {
-  graph [rankdir=LR, bgcolor=white];
-  node [shape=box, style=rounded, fontname=Arial];
-  edge [color=gray50, arrowsize=0.7];
-}

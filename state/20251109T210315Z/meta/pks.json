@@ -1,1 +1,0 @@
-[{"table_name" : "organisations", "constraint_name" : "organisations_pkey", "column_name" : "id"}, {"table_name" : "projects", "constraint_name" : "projects_pkey", "column_name" : "id"}, {"table_name" : "suppliers", "constraint_name" : "suppliers_pkey", "column_name" : "id"}, {"table_name" : "work_sites", "constraint_name" : "work_sites_pkey", "column_name" : "id"}]
