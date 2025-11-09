@@ -1,0 +1,13 @@
+{
+  "ts": "20251109T043848Z",
+  "sha": "808e40d",
+  "path": "state/20251109T043848Z_808e40d",
+  "counts": {
+    "tables": 4,
+    "views": 4,
+    "columns": 4,
+    "pks": 4,
+    "fks": 4,
+    "indexes": 4
+  }
+}
