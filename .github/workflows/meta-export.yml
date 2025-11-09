@@ -1,10 +1,8 @@
-name: Meta Export (RLS Policies & Data Dictionary)
+name: Meta Export (RLS + Data Dictionary)
 
 on:
   push:
     branches: [ main ]
-    paths:
-      - ".github/workflows/meta-export.yml"
   workflow_dispatch:
 
 permissions:
@@ -15,155 +13,69 @@ permissions:
 jobs:
   meta_export:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
     env:
-      # Очікуються secrets:
-      #  - SUPABASE_URL
-      #  - SUPABASE_SERVICE_ROLE_KEY
-      #  - INTROSPECT_PROFILE (необов'язково, за замовчуванням "introspect")
-      INTROSPECT_PROFILE: ${{ secrets.INTROSPECT_PROFILE || 'introspect' }}
+      PROFILE: ${{ secrets.INTROSPECT_PROFILE || 'introspect' }}
 
     steps:
-      - name: Set up job
-        run: echo "Starting meta export…"
-
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Install tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y jq curl graphviz
+      - name: Install jq & curl
+        run: sudo apt-get update -y && sudo apt-get install -y jq curl
 
-      - name: Init snapshot vars
-        id: init
+      - name: Export meta + publish
+        env:
+          URL: ${{ secrets.SUPABASE_URL }}
+          KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         shell: bash
         run: |
           set -euo pipefail
           TS="$(date -u +%Y%m%dT%H%M%SZ)"
-          SHA="$(git rev-parse --short HEAD)"
-          ROOT="${GITHUB_WORKSPACE}"
-          OUT_DIR="state/${TS}"
-          META_DIR="${OUT_DIR}/meta"
-          RPC_DIR="${OUT_DIR}/rpc"
-          mkdir -p "${META_DIR}" "${RPC_DIR}"
-          echo "TS=${TS}"           >> "$GITHUB_ENV"
-          echo "SHA=${SHA}"         >> "$GITHUB_ENV"
-          echo "OUT_DIR=${OUT_DIR}" >> "$GITHUB_ENV"
-          echo "META_DIR=${META_DIR}" >> "$GITHUB_ENV"
-          echo "RPC_DIR=${RPC_DIR}" >> "$GITHUB_ENV"
+          OUT_STATE="state/${TS}/meta"
+          OUT_PUB="public/api/meta"
+          mkdir -p "${OUT_STATE}" "${OUT_PUB}/latest" "${OUT_PUB}/snapshots/${TS}"
 
-      - name: Fetch dictionaries via REST (introspect profile)
-        shell: bash
-        env:
-          URL: ${{ secrets.SUPABASE_URL }}
-          KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          PROFILE: ${{ env.INTROSPECT_PROFILE }}
-        run: |
-          set -euo pipefail
+          hdr_pg=( -H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" -H "Accept-Profile: postgres" -H "Content-Type: application/json" )
+          hdr_int=( -H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" -H "Accept-Profile: ${PROFILE}" -H "Content-Type: application/json" )
 
-          hdr=("-H" "apikey: ${KEY}" "-H" "Authorization: Bearer ${KEY}" "-H" "Accept-Profile: ${PROFILE}" "-H" "Content-Type: application/json")
+          # RLS policies
+          if curl -fsS "${hdr_pg[@]}" "${URL}/rest/v1/pg_policy?select=oid,polname,polrelid,polcmd,polpermissive,polroles,polqual,polwithcheck" \
+            -o "${OUT_STATE}/rls_policies.json"; then true; else echo "[]" > "${OUT_STATE}/rls_policies.json"; fi
 
-          # Безпечний запит: якщо API вернув помилку-об’єкт, збережемо в *_error.json,
-          # а основний файл залишимо валідним пустим масивом, щоб збірка не падала.
-          api() {
-            local path="$1" out="$2"
-            if curl -sS "${hdr[@]}" "${URL}${path}" -o "${out}.raw" -w "%{http_code}" | grep -qE "^(200|204)$"; then
-              # Якщо прийшла одна сутність-об'єкт, загорнемо в масив
-              if jq -e 'type=="array"' "${out}.raw" >/dev/null 2>&1; then
-                jq '.' "${out}.raw" > "${out}"
-              else
-                jq -c 'if type=="object" then [.] else . end' "${out}.raw" > "${out}"
-              fi
-              rm -f "${out}.raw"
-            else
-              mv "${out}.raw" "${out%.json}_error.json" || true
-              echo "[]" > "${out}"
-            fi
-          }
+          # dictionary (compose from rpc endpoints)
+          curl -fsS "${hdr_int[@]}" "${URL}/rest/v1/rpc/tables"  -d '{}' -o "${OUT_STATE}/tables.json"   || echo "[]" > "${OUT_STATE}/tables.json"
+          curl -fsS "${hdr_int[@]}" "${URL}/rest/v1/rpc/columns" -d '{}' -o "${OUT_STATE}/columns.json"  || echo "[]" > "${OUT_STATE}/columns.json"
+          curl -fsS "${hdr_int[@]}" "${URL}/rest/v1/rpc/fks"     -d '{}' -o "${OUT_STATE}/fks.json"      || echo "[]" > "${OUT_STATE}/fks.json"
+          curl -fsS "${hdr_int[@]}" "${URL}/rest/v1/rpc/pks"     -d '{}' -o "${OUT_STATE}/pks.json"      || echo "[]" > "${OUT_STATE}/pks.json"
 
-          # основні словники з нашого introspect API
-          mkdir -p "${RPC_DIR}"
-          api "/rest/v1/rpc/tables"  "${RPC_DIR}/tables.json"
-          api "/rest/v1/rpc/columns" "${RPC_DIR}/columns.json"
-          api "/rest/v1/rpc/pks"     "${RPC_DIR}/pks.json"
-          api "/rest/v1/rpc/fks"     "${RPC_DIR}/fks.json"
-          api "/rest/v1/rpc/indexes" "${RPC_DIR}/indexes.json"
-          api "/rest/v1/rpc/views"   "${RPC_DIR}/views.json"
-
-      - name: Build summary (policies & dictionary)
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # Збирання таблиці зі схемою -> таблиця та кількістю стовпчиків
           jq -n \
-            --slurpfile t "${RPC_DIR}/tables.json" \
-            --slurpfile c "${RPC_DIR}/columns.json" \
-            '{
-               table_count: ($t[0]|length),
-               column_count: ($c[0]|length),
-               tables: ($t[0] | map({schema_name, table_name}))
-             }' > "${META_DIR}/dictionary.json"
+            --slurpfile t "${OUT_STATE}/tables.json" \
+            --slurpfile c "${OUT_STATE}/columns.json" \
+            --slurpfile f "${OUT_STATE}/fks.json" \
+            --slurpfile p "${OUT_STATE}/pks.json" '
+            { tables:($t[0]), columns:($c[0]), fks:($f[0]), pks:($p[0]) }' \
+            > "${OUT_STATE}/dictionary.json"
 
-          # Компактне summary для README / Pages
-          jq -n \
-            --slurpfile t "${RPC_DIR}/tables.json" \
-            --slurpfile v "${RPC_DIR}/views.json" \
-            --slurpfile p "${RPC_DIR}/pks.json" \
-            --slurpfile f "${RPC_DIR}/fks.json" \
-            --slurpfile i "${RPC_DIR}/indexes.json" \
-            '{
-              stats: {
-                tables: ($t[0]|length),
-                views:  ($v[0]|length),
-                pks:    ($p[0]|length),
-                fks:    ($f[0]|length),
-                indexes:($i[0]|length)
-              }
-            }' > "${OUT_DIR}/summary.json"
+          # publish snapshot + latest
+          rsync -a "${OUT_STATE}/" "${OUT_PUB}/snapshots/${TS}/"
+          rm -rf "${OUT_PUB}/latest" && mkdir -p "${OUT_PUB}/latest"
+          rsync -a "${OUT_PUB}/snapshots/${TS}/" "${OUT_PUB}/latest/"
 
-          # Markdown-зведення
-          {
-            echo "# Meta Export Snapshot"
-            echo
-            echo "- Timestamp (UTC): ${TS}"
-            echo "- Commit: ${SHA}"
-            echo
-            echo "## Stats"
-            jq -r '.stats | to_entries[] | "- \(.key): \(.value)"' "${OUT_DIR}/summary.json"
-            echo
-            echo "## Tables (first 20)"
-            jq -r '.tables[:20] | map("- \(.schema_name).\(.table_name)")[]' "${META_DIR}/dictionary.json"
-          } > "${OUT_DIR}/summary.md"
-
-      - name: Commit & Push snapshot
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Commit & Push
         shell: bash
         run: |
           set -euo pipefail
           git config user.name  "meta-export-bot"
           git config user.email "meta-export-bot@users.noreply.github.com"
-
-          # Додаємо snapshot
-          git add "${OUT_DIR}"
-          git commit -m "meta-export snapshot ${TS} (${SHA}) [skip ci]" || echo "Nothing to commit"
-
-          # Безпечний push (враховує паралельні зміни у main)
+          git add public/api/meta state/*/meta
+          git commit -m "meta-export: meta snapshot [skip ci]" || echo "Nothing to commit"
           git fetch origin main
           git rebase origin/main || true
           git push origin HEAD:main
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
-        with:
-          path: state
+        with: { path: public }
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
