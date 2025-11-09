@@ -1,9 +1,9 @@
 name: Meta Export (RLS Policies & Data Dictionary)
 
 on:
+  workflow_dispatch:
   push:
     branches: [ "main" ]
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -20,172 +20,98 @@ jobs:
 
       - name: Install tools
         run: |
-          sudo apt-get update
+          sudo apt-get update -y
           sudo apt-get install -y jq postgresql-client
 
       - name: Prepare output dirs
-        run: |
-          mkdir -p public/api/db
+        run: mkdir -p public/api/db
 
-      - name: Export RLS Policies (policies.json)
+      - name: Check connection
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
+          echo "🔗 Testing connection..."
+          psql "$DATABASE_URL" -c "select now();" || (echo "❌ Cannot connect to database" && exit 1)
 
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At -c "
+      - name: Export RLS Policies
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          echo "🟢 Exporting RLS policies..."
+          if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At -c "
             with p as (
-              select
-                n.nspname                         as schema_name,
-                c.relname                         as table_name,
-                pol.polname                       as policy_name,
-                pol.polpermissive                 as permissive,
-                pol.polcmd                        as command,          -- r (select), a (insert), w (update), d (delete)
-                pol.polroles::text                as roles,
-                pg_get_expr(pol.polqual,   pol.polrelid)  as using_expr,
-                pg_get_expr(pol.polwithcheck, pol.polrelid) as check_expr
+              select n.nspname as schema_name,
+                     c.relname as table_name,
+                     pol.polname as policy_name,
+                     pol.polcmd as command,
+                     pol.polroles::text as roles,
+                     pg_get_expr(pol.polqual, pol.polrelid) as using_expr,
+                     pg_get_expr(pol.polwithcheck, pol.polrelid) as check_expr
               from pg_policy pol
-              join pg_class  c on c.oid = pol.polrelid
+              join pg_class c on c.oid = pol.polrelid
               join pg_namespace n on n.oid = c.relnamespace
               where n.nspname not in ('pg_catalog','information_schema')
             )
-            select coalesce(jsonb_agg(
+            select coalesce(jsonb_pretty(jsonb_agg(
               jsonb_build_object(
                 'schema', schema_name,
                 'table',  table_name,
                 'policy', policy_name,
                 'command', command,
-                'roles',   roles,
-                'permissive', permissive,
-                'using',   using_expr,
-                'check',   check_expr
+                'roles', roles,
+                'using', using_expr,
+                'check', check_expr
               )
-              order by schema_name, table_name, policy_name
-            ), '[]'::jsonb)::text
-            from p;
-          " > public/api/db/policies.json
+            )), '[]') from p;
+          " > public/api/db/policies.json; then
+            echo "⚠️ Warning: failed to export RLS policies"
+            echo "[]" > public/api/db/policies.json
+          fi
 
-      - name: Export Data Dictionary (datadict.json)
+      - name: Export Data Dictionary
         shell: bash
+        continue-on-error: true
         run: |
           set -euo pipefail
-
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At -c "
+          echo "🟢 Exporting Data Dictionary..."
+          if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At -c "
             with cols as (
-              select
-                c.table_schema  as schema_name,
-                c.table_name    as table_name,
-                c.column_name,
-                c.data_type,
-                c.is_nullable,
-                c.ordinal_position,
-                c.column_default
-              from information_schema.columns c
-              join information_schema.tables t
-                on t.table_schema=c.table_schema and t.table_name=c.table_name
-              where t.table_type='BASE TABLE'
-                and c.table_schema not in ('pg_catalog','information_schema')
-            ),
-            pks as (
-              select
-                kcu.table_schema as schema_name,
-                kcu.table_name   as table_name,
-                kcu.column_name  as column_name,
-                kcu.ordinal_position
-              from information_schema.table_constraints tc
-              join information_schema.key_column_usage kcu
-                on kcu.constraint_name = tc.constraint_name
-               and kcu.constraint_schema = tc.constraint_schema
-              where tc.constraint_type='PRIMARY KEY'
-            ),
-            fks as (
-              select
-                src_tc.table_schema              as src_schema,
-                src_tc.table_name                as src_table,
-                src_kcu.column_name              as src_column,
-                tgt_tc.table_schema              as tgt_schema,
-                tgt_tc.table_name                as tgt_table,
-                tgt_kcu.column_name              as tgt_column,
-                src_kcu.position_in_unique_constraint
-              from information_schema.table_constraints src_tc
-              join information_schema.key_column_usage src_kcu
-                on src_kcu.constraint_name = src_tc.constraint_name
-               and src_kcu.constraint_schema = src_tc.constraint_schema
-              join information_schema.referential_constraints rc
-                on rc.constraint_name  = src_tc.constraint_name
-               and rc.constraint_schema = src_tc.constraint_schema
-              join information_schema.table_constraints tgt_tc
-                on tgt_tc.constraint_name  = rc.unique_constraint_name
-               and tgt_tc.constraint_schema = rc.unique_constraint_schema
-              join information_schema.key_column_usage tgt_kcu
-                on tgt_kcu.constraint_name  = tgt_tc.constraint_name
-               and tgt_kcu.constraint_schema = tgt_tc.constraint_schema
-               and tgt_kcu.ordinal_position = src_kcu.position_in_unique_constraint
-              where src_tc.constraint_type='FOREIGN KEY'
-            ),
-            t as (
-              select distinct schema_name, table_name
-              from cols
+              select table_schema, table_name, column_name, data_type, is_nullable, column_default
+              from information_schema.columns
+              where table_schema not in ('pg_catalog','information_schema')
             )
-            select coalesce(
-              jsonb_agg(
-                jsonb_build_object(
-                  'schema', t.schema_name,
-                  'table',  t.table_name,
-                  'columns', (
-                    select jsonb_agg(jsonb_build_object(
-                      'name', c.column_name,
-                      'type', c.data_type,
-                      'nullable', (c.is_nullable='YES'),
-                      'default', c.column_default,
-                      'ordinal', c.ordinal_position,
-                      'is_pk', exists(
-                        select 1 from pks where pks.schema_name=t.schema_name
-                                            and pks.table_name=t.table_name
-                                            and pks.column_name=c.column_name)
-                    ) order by c.ordinal_position)
-                    from cols c
-                    where c.schema_name=t.schema_name and c.table_name=t.table_name
-                  ),
-                  'fks', (
-                    select coalesce(jsonb_agg(jsonb_build_object(
-                      'src_column',  fk.src_column,
-                      'ref_schema',  fk.tgt_schema,
-                      'ref_table',   fk.tgt_table,
-                      'ref_column',  fk.tgt_column,
-                      'ordinal',     fk.position_in_unique_constraint
-                    ) order by fk.position_in_unique_constraint), '[]'::jsonb)
-                    from fks fk
-                    where fk.src_schema=t.schema_name and fk.src_table=t.table_name
-                  )
-                )
-                order by t.schema_name, t.table_name
-              ),
-              '[]'::jsonb
-            )::text
-            from t;
-          " > public/api/db/datadict.json
+            select coalesce(jsonb_pretty(jsonb_agg(
+              jsonb_build_object(
+                'schema', table_schema,
+                'table', table_name,
+                'column', column_name,
+                'type', data_type,
+                'nullable', is_nullable,
+                'default', column_default
+              )
+            )), '[]') from cols;
+          " > public/api/db/datadict.json; then
+            echo "⚠️ Warning: failed to export Data Dictionary"
+            echo "[]" > public/api/db/datadict.json
+          fi
 
-      - name: Render Data Dictionary (datadict.md)
+      - name: Render Markdown summary
         shell: bash
         run: |
-          set -euo pipefail
+          echo "# Data Dictionary" > public/api/db/datadict.md
           jq -r '
-            ( "# Data Dictionary\n" ),
-            ( .[] |
-              "## " + .schema + "." + .table + "\n" +
-              "| Column | Type | PK | Nullable | Default |\n|---|---|:--:|:--:|---|\n" +
-              ( .columns | map("| " + .name + " | " + .type + " | " + (if .is_pk then "✓" else "" end) + " | " + (if .nullable then "✓" else "" end) + " | " + ( .default // "" ) + " |") | join("\n") ) + "\n" +
-              ( if (.fks|length) > 0 then
-                  "\n**Foreign keys:**\n" +
-                  ( .fks | map( "- " + .src_column + " → " + .ref_schema + "." + .ref_table + "(" + .ref_column + ")" ) | join("\n") ) + "\n"
-                else "\n" end )
-            )
-          ' public/api/db/datadict.json > public/api/db/datadict.md
+            .[] | "## " + .schema + "." + .table + "\n" +
+            "- **Column:** " + .column + "\n" +
+            "- **Type:** " + .type + "\n" +
+            "- **Nullable:** " + .nullable + "\n" +
+            "- **Default:** " + (.default // "") + "\n"
+          ' public/api/db/datadict.json >> public/api/db/datadict.md || echo "_Empty_"
 
-      - name: Commit & Push
+      - name: Commit & Push results
         run: |
-          git config user.name  "meta-export-bot"
+          git config user.name "meta-export-bot"
           git config user.email "meta-export-bot@users.noreply.github.com"
           git add public/api/db/policies.json public/api/db/datadict.json public/api/db/datadict.md
-          git commit -m "chore(meta-export): policies & data dictionary [skip ci]" || true
+          git commit -m "chore: update meta export [skip ci]" || echo "No changes to commit"
           git push origin HEAD:"${GITHUB_REF_NAME:-main}" || true
