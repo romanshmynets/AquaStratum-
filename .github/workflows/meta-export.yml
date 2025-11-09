@@ -1,109 +1,127 @@
-name: Meta Export (REST RPC)
+name: Meta Export (RLS Policies & Data Dictionary)
 
 on:
   push:
     branches: [ main ]
     paths:
       - ".github/workflows/meta-export.yml"
-      - "sql/**"
   workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
 
 jobs:
   meta_export:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare dirs
+      - name: Install tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y jq curl
+
+      - name: Init snapshot vars
+        id: init
+        shell: bash
         run: |
           set -euo pipefail
           TS="$(date -u +%Y%m%dT%H%M%SZ)"
-          OUT="state/${TS}/rpc"
+          SHA="$(git rev-parse --short HEAD || echo 'no-git')"
+          OUT="state/${TS}/meta"
           mkdir -p "$OUT"
-          echo "TS=$TS" >> "$GITHUB_ENV"
+          echo "TS=$TS"   >> "$GITHUB_ENV"
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
           echo "OUT=$OUT" >> "$GITHUB_ENV"
 
-      - name: Fetch RPC JSON (tables/columns/pks/fks/indexes/views)
-        shell: bash
+      - name: Fetch dictionaries via REST (introspect profile)
         env:
           URL: ${{ secrets.SUPABASE_URL }}
           KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: |
-          set -euo pipefail
-          hdr() {
-            echo "-H apikey: $KEY -H Authorization: Bearer $KEY -H Accept-Profile: introspect -H Content-Type: application/json"
-          }
-
-          curl -fsS "$URL/rest/v1/rpc/tables"  $(hdr) -d '{}' > "$OUT/tables.json"
-          curl -fsS "$URL/rest/v1/rpc/columns" $(hdr) -d '{}' > "$OUT/columns.json"
-          curl -fsS "$URL/rest/v1/rpc/pks"     $(hdr) -d '{}' > "$OUT/pks.json"
-          curl -fsS "$URL/rest/v1/rpc/fks"     $(hdr) -d '{}' > "$OUT/fks.json"
-          curl -fsS "$URL/rest/v1/rpc/indexes" $(hdr) -d '{}' > "$OUT/indexes.json"
-          curl -fsS "$URL/rest/v1/rpc/views"   $(hdr) -d '{}' > "$OUT/views.json"
-
-      - name: Export RLS policies (READ-ONLY via REST)
         shell: bash
-        env:
-          URL: ${{ secrets.SUPABASE_URL }}
-          KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: |
-          set -euo pipefail
-          curl -fsS "$URL/rest/v1/pg_policy?select=oid,polname,polrelid,polcmd,polpermissive,polroles,polqual,polwithcheck" \
-            -H "apikey: $KEY" \
-            -H "Authorization: Bearer $KEY" \
-            -H "Accept-Profile: postgres" \
-            -H "Content-Type: application/json" > "$OUT/rls_policies.json"
-
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Build summary
         run: |
           set -euo pipefail
           OUT="${OUT:?}"
-          TABS=$(jq 'length' "$OUT/tables.json")
-          COLS=$(jq 'length' "$OUT/columns.json")
-          PKS=$(jq 'length' "$OUT/pks.json")
-          FKS=$(jq 'length' "$OUT/fks.json")
-          INDX=$(jq 'length' "$OUT/indexes.json")
-          VIEWS=$(jq 'length' "$OUT/views.json")
-          RLS=$(jq 'length' "$OUT/rls_policies.json")
 
-          jq -r '.[0:30] | map("\(.table_schema).\(.table_name)") | @tsv' "$OUT/tables.json" \
-            | sed 's/^/- /' > "$OUT/tables_top30.md"
+          hdr="-H apikey:${KEY} -H Authorization: Bearer ${KEY} -H Accept-Profile:introspect -H Content-Type: application/json"
 
+          # Core catalog (must exist)
+          curl -sS ${hdr} "${URL}/rest/v1/rpc/tables"   -d '{}' > "${OUT}/tables.json"
+          curl -sS ${hdr} "${URL}/rest/v1/rpc/columns"  -d '{}' > "${OUT}/columns.json"
+          curl -sS ${hdr} "${URL}/rest/v1/rpc/pks"      -d '{}' > "${OUT}/pks.json"
+          curl -sS ${hdr} "${URL}/rest/v1/rpc/fks"      -d '{}' > "${OUT}/fks.json"
+          curl -sS ${hdr} "${URL}/rest/v1/rpc/indexes"  -d '{}' > "${OUT}/indexes.json"
+          curl -sS ${hdr} "${URL}/rest/v1/rpc/views"    -d '{}' > "${OUT}/views.json"
+
+          # Optional: RLS policies.
+          # Якщо у тебе ще нема опублікованого RPC/виду rls_policies — не падаємо, а записуємо порожній масив.
+          if curl -fsS ${hdr} "${URL}/rest/v1/rpc/rls_policies" -d '{}' > "${OUT}/rls_policies.json"; then
+            echo "RLS policies fetched"
+          else
+            echo "[]"> "${OUT}/rls_policies.json"
+            echo "Warning: rls_policies endpoint not available; wrote empty list."
+          fi
+
+      - name: Build summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="${OUT:?}"
+
+          TABS=$(jq 'length'        "${OUT}/tables.json")
+          COLS=$(jq 'length'        "${OUT}/columns.json")
+          PKS=$(jq 'length'         "${OUT}/pks.json")
+          FKS=$(jq 'length'         "${OUT}/fks.json")
+          INDX=$(jq 'length'        "${OUT}/indexes.json")
+          VIEWS=$(jq 'length'       "${OUT}/views.json")
+          RLS=$(jq 'length'         "${OUT}/rls_policies.json")
+
+          jq -r '.[0:30] | map("\(.table_schema).\(.table_name)") | @tsv' "${OUT}/tables.json" \
+            | sed 's/^/- /' > "${OUT}/tables_top30.md"
+
+          # Summary markdown near state root
           mkdir -p "state/${TS}"
-          cat > "state/${TS}/summary.md" <<EOF
-# AquaStratum – Inventory Snapshot (${TS})
+          {
+            echo "# AquaStratum – Meta Snapshot (${TS})"
+            echo ""
+            echo "Commit: ${SHA}"
+            echo ""
+            echo "## Counters"
+            echo "- Tables:  ${TABS}"
+            echo "- Columns: ${COLS}"
+            echo "- PKs:     ${PKS}"
+            echo "- FKs:     ${FKS}"
+            echo "- Indexes: ${INDX}"
+            echo "- Views:   ${VIEWS}"
+            echo "- RLS policies: ${RLS}"
+            echo ""
+            echo "## Sample tables (first 30)"
+            cat  "${OUT}/tables_top30.md"
+            echo ""
+          } > "state/${TS}/summary.md"
 
-## Counters
-- Tables: ${TABS}
-- Columns: ${COLS}
-- PKs: ${PKS}
-- FKs: ${FKS}
-- Indexes: ${INDX}
-- Views: ${VIEWS}
-- RLS policies: ${RLS}
-
-## Sample tables (first 30)
-$(cat "$OUT/tables_top30.md")
-EOF
-
-      - name: Commit & Push
+      - name: Commit & Push snapshot
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
           git config user.name  "meta-export-bot"
           git config user.email "meta-export-bot@users.noreply.github.com"
-          git add state/${TS}
-          git commit -m "meta-export snapshot ${TS} via REST RPC [skip ci]" || echo "Nothing to commit"
+          git add "state/${TS}"
+          git commit -m "meta-export snapshot ${TS} (${SHA}) [skip ci]" || echo "Nothing to commit"
           git push origin HEAD:main
+
+      # --- Optional GitHub Pages publish (зручний перегляд у браузері) ---
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: state
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
