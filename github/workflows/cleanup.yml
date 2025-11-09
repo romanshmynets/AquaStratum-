@@ -1,0 +1,34 @@
+name: Cleanup Repo (wipe everything)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # дає правo пушити назад у репо
+
+jobs:
+  wipe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name  "repo-introspect-bot"
+          git config user.email "repo-introspect-bot@users.noreply.github.com"
+
+      - name: Remove everything (tracked & untracked)
+        run: |
+          # видаляємо всі відслідковувані файли (у т.ч. сам workflow)
+          git rm -rf .
+          # на всяк випадок прибираємо сміття
+          git clean -fdx || true
+          # щоб репозиторій не був порожнім, додамо плейсхолдер
+          echo "# Empty repo" > README.md
+          git add -A
+          git commit -m "🔥 Wipe repository (keep history)"
+          git push origin HEAD:main
