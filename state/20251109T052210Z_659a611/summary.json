@@ -1,0 +1,13 @@
+{
+  "ts": "20251109T052210Z",
+  "sha": "659a611",
+  "path": "state/20251109T052210Z_659a611",
+  "counts": {
+    "tables": 4,
+    "views": 4,
+    "columns": 4,
+    "pks": 4,
+    "fks": 4,
+    "indexes": 4
+  }
+}
