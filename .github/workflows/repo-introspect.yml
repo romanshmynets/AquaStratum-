@@ -1,190 +1,94 @@
-name: Repo Introspection
+name: Repo Introspect (Code + Sources)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   workflow_dispatch:
-  schedule:
-    - cron: "0 4 * * *"  # daily @ 04:00 UTC
 
 permissions:
   contents: write
   pages: write
   id-token: write
 
-concurrency:
-  group: repo-introspect-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  code_inventory:
+  repo_introspect:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
-      - name: Mark repo as safe
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Install tools (jq, cloc, syft)
+      - name: Install tooling
         run: |
-          sudo apt-get update
-          sudo apt-get install -y jq cloc curl
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-            | sudo sh -s -- -b /usr/local/bin v1.16.0
+          sudo apt-get update -y
+          sudo apt-get install -y jq cloc tree zip
 
-      - name: Prepare OUT dir
-        id: prep
+      - name: Build code inventory + raw sources
+        shell: bash
         run: |
           set -euo pipefail
-          TS="$(date -u +%Y%m%dT%H%M%SZ)"; echo "TS=$TS" >> "$GITHUB_ENV"
-          SHA="$(git rev-parse --short HEAD)"; echo "SHA=$SHA" >> "$GITHUB_ENV"
-          OUT="state/${TS}_${SHA}/code"; echo "OUT=$OUT" >> "$GITHUB_ENV"
-          mkdir -p "$OUT" public/api/code
+          TS="$(date -u +%Y%m%dT%H%M%SZ)"
+          OUT_STATE="state/${TS}/code"
+          OUT_PUB="public/api/code"
+          mkdir -p "${OUT_STATE}" "${OUT_PUB}/latest" "${OUT_PUB}/snapshots/${TS}"
 
-      - name: Build file allowlist/denylist
-        run: |
-          cat > .github/codeignore <<'EOF'
-          .git/
-          node_modules/
-          dist/
-          build/
-          .next/
-          .vercel/
-          coverage/
-          .turbo/
-          .cache/
-          .DS_Store
-          state/
-          snapshots/
-          sbom/
-          db_inventory/
-          public/api/db/
-          public/api/db_data/
-          public/api/code/
-          EOF
+          # tree (human view)
+          (tree -a -I ".git|node_modules|.next|dist|build" > "${OUT_STATE}/tree.txt") || true
 
-      - name: Generate file tree (human-readable)
-        run: |
-          set -euo pipefail
-          EXCLUDES="$(sed 's/[].[^$\\*]/\\&/g' .github/codeignore | paste -sd '|' -)"
-          echo "Repository tree (filtered):" > "$OUT/tree.txt"
-          printf "\nExcludes:\n" >> "$OUT/tree.txt"
-          cat .github/codeignore >> "$OUT/tree.txt"
-          printf "\n===========================\n\n" >> "$OUT/tree.txt"
-          if [ -n "$EXCLUDES" ]; then
-            find . -type f | grep -Ev "^./($EXCLUDES)" | sed 's|^\./||' | sort >> "$OUT/tree.txt"
-          else
-            find . -type f | sed 's|^\./||' | sort >> "$OUT/tree.txt"
-          fi
+          # inventory: path + size + sha1
+          find . -type f -not -path "./.git/*" -print0 \
+            | xargs -0 -I{} bash -lc '
+                p="{}"; s=$(stat -c%s "{}" 2>/dev/null || echo 0);
+                h=$(sha1sum "{}" | awk "{print \$1}");
+                printf "{\"path\":\"%s\",\"bytes\":%s,\"sha1\":\"%s\"}\n" "${p#./}" "$s" "$h"
+              ' \
+            | jq -s '.' > "${OUT_STATE}/inventory.json"
 
-      - name: Build JSON inventory (size, sha256, ext, path)
-        run: |
-          set -euo pipefail
-          EXCLUDES="$(sed 's/[].[^$\\*]/\\&/g' .github/codeignore | paste -sd '|' -)"
-          TMP="$(mktemp)"
-          if [ -n "$EXCLUDES" ]; then
-            find . -type f | grep -Ev "^./($EXCLUDES)" | sed 's|^\./||' | sort > "$TMP"
-          else
-            find . -type f | sed 's|^\./||' | sort > "$TMP"
-          fi
-          {
-            echo "["
-            first=1
-            while IFS= read -r f; do
-              [ -f "$f" ] || continue
-              sz=$(stat -c%s "$f" || echo 0)
-              sha=$(sha256sum "$f" | awk '{print $1}')
-              ext="${f##*.}"; [ "$ext" = "$f" ] && ext=""
-              obj=$(jq -n --arg path "$f" --arg ext "$ext" --arg sha "$sha" --argjson size "$sz" \
-                      '{path:$path, ext:$ext, size:$size, sha256:$sha}')
-              if [ $first -eq 1 ]; then
-                echo "  $obj"; first=0
-              else
-                echo "  ,$obj"
-              fi
-            done < "$TMP"
-            echo "]"
-          } > "$OUT/inventory.json"
+          # cloc
+          cloc --json --quiet --exclude-dir=.git,node_modules,.next,dist,build . > "${OUT_STATE}/cloc.json" || echo '{}' > "${OUT_STATE}/cloc.json"
 
-      - name: Language/LOC report (cloc)
-        run: |
-          set -euo pipefail
-          EXCL_DIRS=$(awk -F/ '/\/$/ {print $1}' .github/codeignore | paste -sd, -)
-          if [ -n "$EXCL_DIRS" ]; then
-            cloc --json --quiet --exclude-dir="$EXCL_DIRS" . > "$OUT/cloc.json" || echo '{}' > "$OUT/cloc.json"
-          else
-            cloc --json --quiet . > "$OUT/cloc.json" || echo '{}' > "$OUT/cloc.json"
-          fi
-
-      - name: SBOM (syft dir:.)
-        run: |
-          set -euo pipefail
-          syft dir:. -o json > "$OUT/sbom.json" || echo '{}' > "$OUT/sbom.json"
-
-      - name: Build summary.json (counts)
-        run: |
-          set -euo pipefail
-          files=$(jq 'length' "$OUT/inventory.json")
-          bytes=$(jq '[.[].size] | add // 0' "$OUT/inventory.json")
-          langs=$(jq 'del(.header) | length' "$OUT/cloc.json" 2>/dev/null || echo 0)
+          # sbom (lightweight: enumerate actions and files; optionally replace with syft if needed)
           jq -n \
-            --arg ts  "$TS" \
-            --arg sha "$SHA" \
-            --argjson files "$files" \
-            --argjson bytes "$bytes" \
-            --argjson lang_count "$langs" \
-            --argjson top10 "$(jq 'sort_by(-.size) | .[0:10]' "$OUT/inventory.json")" \
-            '{ts:$ts, sha:$sha, files:$files, bytes:$bytes, lang_count:$lang_count, top10:$top10}' \
-            > "$OUT/summary.json"
+            --arg ts "$TS" \
+            --argjson files "$(jq '. | length' "${OUT_STATE}/inventory.json")" \
+            '{timestamp:$ts, components:{repo_files:$files}, notes:"Replace with Syft/CycloneDX if required"}' \
+            > "${OUT_STATE}/sbom.json"
 
-      - name: Publish snapshot and latest
-        run: |
-          set -euo pipefail
-          SNAP_DIR="public/api/code/${TS}_${SHA}"
-          LATEST_DIR="public/api/code/latest"
-          mkdir -p "$SNAP_DIR" "$LATEST_DIR"
-          cp -r "$OUT/"* "$SNAP_DIR/"
+          # summary
+          FILES=$(jq 'length' "${OUT_STATE}/inventory.json")
+          BYTES=$(jq '[ .[].bytes ] | add' "${OUT_STATE}/inventory.json")
+          jq -n --arg ts "$TS" --argjson files "$FILES" --argjson bytes "$BYTES" \
+            '{ts:$ts, files:$files, bytes:$bytes}' > "${OUT_STATE}/summary.json"
 
-          # оновлюємо latest (стерти і скопіювати заново)
-          rm -rf "$LATEST_DIR"
-          mkdir -p "$LATEST_DIR"
-          cp -r "$OUT/"* "$LATEST_DIR/"
+          # RAW mirror: only important dirs
+          mkdir -p "${OUT_STATE}/raw"
+          cp -r .github/workflows "${OUT_STATE}/raw"/ 2>/dev/null || true
+          cp -r scripts "${OUT_STATE}/raw"/ 2>/dev/null || true
+          cp -r supabase "${OUT_STATE}/raw"/ 2>/dev/null || true
+          [ -f schema.sql ] && cp schema.sql "${OUT_STATE}/raw/" || true
+          [ -f seed.sql ] && cp seed.sql "${OUT_STATE}/raw/" || true
+          (cd "${OUT_STATE}" && zip -r "source.zip" "raw" >/dev/null)
 
-          # оновлюємо index.json: додаємо/оновлюємо запис і latest-вказівник
-          INDEX="public/api/code/index.json"
-          if [ -f "$INDEX" ]; then
-            jq --arg ts "$TS" --arg sha "$SHA" --arg path "$SNAP_DIR" \
-               '.[0] as $i
-                | .snapshots = ( (.snapshots // []) + [{ts:$ts, sha:$sha, path:$path}] )
-                | .snapshots |= (unique_by(.ts) | sort_by(.ts) | reverse)
-                | .latest = {ts:$ts, sha:$sha, path:$path}' \
-               "$INDEX" 2>/dev/null \
-               || jq -n --arg ts "$TS" --arg sha "$SHA" --arg path "$SNAP_DIR" \
-                    '{latest:{ts:$ts,sha:$sha,path:$path},snapshots:[{ts:$ts,sha:$sha,path:$path}]}' \
-               > "$INDEX.tmp" && mv "$INDEX.tmp" "$INDEX"
-          else
-            jq -n --arg ts "$TS" --arg sha "$SHA" --arg path "$SNAP_DIR" \
-              '{latest:{ts:$ts,sha:$sha,path:$path},snapshots:[{ts:$ts,sha:$sha,path:$path}]}' > "$INDEX"
-          fi
+          # publish snapshot + atomically update latest
+          rsync -a "${OUT_STATE}/" "public/api/code/snapshots/${TS}/"
+          rm -rf "${OUT_PUB}/latest" && mkdir -p "${OUT_PUB}/latest"
+          rsync -a "public/api/code/snapshots/${TS}/" "${OUT_PUB}/latest/"
 
-      - name: Commit & Push
+      - name: Commit & Push artifacts
+        shell: bash
         run: |
           set -euo pipefail
           git config user.name  "repo-introspect-bot"
           git config user.email "repo-introspect-bot@users.noreply.github.com"
-          git add state/ public/api/code/
-          git commit -m "chore(repo-introspect): code snapshot ${TS}_${SHA} [skip ci]" || echo "Nothing to commit"
-          git pull --rebase origin "${GITHUB_REF_NAME}" || true
-          git push origin HEAD:"${GITHUB_REF_NAME}" || true
+          git add public/api/code state/*/code
+          git commit -m "repo-introspect: code snapshot [skip ci]" || echo "Nothing to commit"
+          git fetch origin main
+          git rebase origin/main || true
+          git push origin HEAD:main
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
+        with: { path: public }
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
