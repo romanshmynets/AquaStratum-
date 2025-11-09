@@ -47,31 +47,36 @@ jobs:
         run: |
           set -euo pipefail
           OUT="${OUT:?}"
-
           hdr="-H apikey:${KEY} -H Authorization: Bearer ${KEY} -H Accept-Profile:introspect -H Content-Type: application/json"
 
-          # Core catalog (must exist)
-          curl -sS ${hdr} "${URL}/rest/v1/rpc/tables"   -d '{}' > "${OUT}/tables.json"
-          curl -sS ${hdr} "${URL}/rest/v1/rpc/columns"  -d '{}' > "${OUT}/columns.json"
-          curl -sS ${hdr} "${URL}/rest/v1/rpc/pks"      -d '{}' > "${OUT}/pks.json"
-          curl -sS ${hdr} "${URL}/rest/v1/rpc/fks"      -d '{}' > "${OUT}/fks.json"
-          curl -sS ${hdr} "${URL}/rest/v1/rpc/indexes"  -d '{}' > "${OUT}/indexes.json"
-          curl -sS ${hdr} "${URL}/rest/v1/rpc/views"    -d '{}' > "${OUT}/views.json"
+          fetch() {
+            local endpoint="$1"
+            local file="$OUT/$2.json"
+            echo "Fetching $endpoint → $file"
+            if ! curl -fsS ${hdr} "${URL}/rest/v1/rpc/${endpoint}" -d '{}' > "$file"; then
+              echo "[]"> "$file"
+              echo "Warning: RPC ${endpoint} unavailable"
+            fi
+          }
 
-          # Optional: RLS policies.
-          # Якщо у тебе ще нема опублікованого RPC/виду rls_policies — не падаємо, а записуємо порожній масив.
-          if curl -fsS ${hdr} "${URL}/rest/v1/rpc/rls_policies" -d '{}' > "${OUT}/rls_policies.json"; then
-            echo "RLS policies fetched"
-          else
-            echo "[]"> "${OUT}/rls_policies.json"
-            echo "Warning: rls_policies endpoint not available; wrote empty list."
-          fi
+          fetch tables   tables
+          fetch columns  columns
+          fetch pks      pks
+          fetch fks      fks
+          fetch indexes  indexes
+          fetch views    views
+          fetch rls_policies rls_policies
 
       - name: Build summary
         shell: bash
         run: |
           set -euo pipefail
           OUT="${OUT:?}"
+
+          # sanitize any object→array if bad response
+          for f in tables columns pks fks indexes views rls_policies; do
+            jq 'if type=="array" then . else [] end' "$OUT/${f}.json" > "$OUT/${f}.tmp" && mv "$OUT/${f}.tmp" "$OUT/${f}.json"
+          done
 
           TABS=$(jq 'length'        "${OUT}/tables.json")
           COLS=$(jq 'length'        "${OUT}/columns.json")
@@ -82,9 +87,8 @@ jobs:
           RLS=$(jq 'length'         "${OUT}/rls_policies.json")
 
           jq -r '.[0:30] | map("\(.table_schema).\(.table_name)") | @tsv' "${OUT}/tables.json" \
-            | sed 's/^/- /' > "${OUT}/tables_top30.md"
+            | sed 's/^/- /' > "${OUT}/tables_top30.md" || echo "- no tables -" > "${OUT}/tables_top30.md"
 
-          # Summary markdown near state root
           mkdir -p "state/${TS}"
           {
             echo "# AquaStratum – Meta Snapshot (${TS})"
@@ -117,7 +121,6 @@ jobs:
           git commit -m "meta-export snapshot ${TS} (${SHA}) [skip ci]" || echo "Nothing to commit"
           git push origin HEAD:main
 
-      # --- Optional GitHub Pages publish (зручний перегляд у браузері) ---
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
