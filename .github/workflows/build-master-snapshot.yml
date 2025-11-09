@@ -1,24 +1,35 @@
 name: Build Master Snapshot
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
-  workflow_dispatch:
+    paths:
+      - "public/api/**"
+      - ".github/workflows/build-master-snapshot.yml"
 
 permissions:
   contents: write
   pages: write
   id-token: write
 
+env:
+  OUT: public/api/master
+  LATEST_DIR: public/api
+  GHP_BRANCH: gh-pages
+  TZ: "UTC"
+
 jobs:
   build_master_snapshot:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
-      - name: Install tools
+      - name: Install tools (jq, zip)
         run: |
           sudo apt-get update -y
           sudo apt-get install -y jq zip
@@ -28,20 +39,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TS="$(date -u +%Y%m%dT%H%M%SZ)"
-          SHA="$(git rev-parse --short HEAD || echo no-git)"
-          echo "ts=$TS" >> "$GITHUB_OUTPUT"
+          TS=$(date -u +%Y%m%dT%H%M%SZ)
+          SHA=$(git rev-parse --short=12 HEAD)
+          echo "ts=$TS"  >> "$GITHUB_OUTPUT"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Prepare output
         shell: bash
         run: |
           set -euo pipefail
-          OUT="public/api/master/${{ steps.r.outputs.ts }}_${{ steps.r.outputs.sha }}"
-          LATEST="public/api/master/latest"
-          mkdir -p "$OUT" "$LATEST"
-          echo "OUT=$OUT" >> "$GITHUB_ENV"
-          echo "LATEST=$LATEST" >> "$GITHUB_ENV"
+          mkdir -p "$OUT"
+          mkdir -p state
 
       - name: Build master_snapshot.json
         shell: bash
@@ -50,10 +58,11 @@ jobs:
           CODE="public/api/code/latest"
           DB="public/api/db/latest"
           META="public/api/meta/latest"
+          OUT="${OUT}"
 
           safe_obj(){ [ -f "$1" ] && jq -c 'if type=="object" then . else {} end' "$1" || echo "{}"; }
           safe_arr(){ [ -f "$1" ] && jq -c 'if type=="array" then . else [.] end' "$1" || echo "[]"; }
-          safe_txt(){ [ -f "$1" ] && jq -Rn --slurp --arg t "$(cat "$1")" '$t' || echo "\"\""; }
+          safe_txt(){ [ -f "$1" ] && jq -Rn --slurpfile t "$1" '$t[0]' || echo "\"\""; }
 
           CODE_SUMMARY=$(safe_obj "$CODE/summary.json")
           CODE_INVENTORY=$(safe_arr "$CODE/inventory.json")
@@ -93,7 +102,7 @@ jobs:
             '{
               snapshot:{ts:$ts, sha:$sha},
               sources:{ code:$code_path, db:$db_path, meta:$meta_path },
-              code:{ summary:$code_summary, inventory:$code_inventory, cloc:$code_cloc, sbom:$code_sbom, tree_text:($code_tree|fromjson?//"") },
+              code:{ summary:$code_summary, inventory:$code_inventory, cloc:$code_cloc, sbom:$code_sbom, tree_text:$code_tree },
               db:{ tables:$db_tables, columns:$db_columns, pks:$db_pks, fks:$db_fks, indexes:$db_indexes, views:$db_views },
               meta:{ rls_policies:$meta_rls, data_dictionary:$meta_dict }
             }' > "${OUT}/master_snapshot.json"
@@ -102,45 +111,52 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TMP="$(mktemp -d)"
-          mkdir -p "$TMP/code" "$TMP/db" "$TMP/meta"
-          cp -r public/api/code/latest/*  "$TMP/code/"  2>/dev/null || true
-          cp -r public/api/db/latest/*    "$TMP/db/"    2>/dev/null || true
-          cp -r public/api/meta/latest/*  "$TMP/meta/"  2>/dev/null || true
-          (cd "$TMP" && zip -r "../master_snapshot.zip" . >/dev/null)
-          mv "$(dirname "$TMP")/master_snapshot.zip" "${OUT}/master_snapshot.zip"
-          rm -rf "$TMP"
+          SNAP_DIR="state/${{ steps.r.outputs.ts }}_${{ steps.r.outputs.sha }}/master"
+          mkdir -p "$SNAP_DIR"
+          cp -a "$OUT/master_snapshot.json" "$SNAP_DIR/"
+          (cd "$SNAP_DIR" && zip -r ../master_snapshot.zip . >/dev/null)
+          mv "state/${{ steps.r.outputs.ts }}_${{ steps.r.outputs.sha }}/master_snapshot.zip" "$OUT/master_snapshot.zip"
 
       - name: Update latest alias + index
         shell: bash
         run: |
           set -euo pipefail
-          OUT="${OUT:?}"; LATEST="${LATEST:?}"
-          rm -rf "$LATEST" && mkdir -p "$LATEST"
-          rsync -a "$OUT/" "$LATEST/"
-          jq -n \
-            --arg out "$OUT" \
-            --arg latest "$LATEST" \
-            '{
-              latest:{json:($latest+"/master_snapshot.json"), zip:($latest+"/master_snapshot.zip")},
-              snapshot:{json:($out+"/master_snapshot.json"), zip:($out+"/master_snapshot.zip")}
-            }' > "public/api/master/index.json"
+          LATEST="$LATEST_DIR/master/latest"
+          mkdir -p "$LATEST"
+          cp -a "$OUT/master_snapshot.json" "$LATEST/"
+          cp -a "$OUT/master_snapshot.zip"  "$LATEST/"
+
+          # simple index
+          cat > "$LATEST/index.json" <<EOF
+          {
+            "ts": "${{ steps.r.outputs.ts }}",
+            "sha": "${{ steps.r.outputs.sha }}",
+            "files": ["master_snapshot.json","master_snapshot.zip"]
+          }
+          EOF
 
       - name: Commit & Push
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name  "build-master-bot"
-          git config user.email "build-master-bot@users.noreply.github.com"
-          git add public/api/master/**
-          git commit -m "build: master snapshot ${{ steps.r.outputs.ts }} (${{ steps.r.outputs.sha }}) [skip ci]" || echo "Nothing to commit"
+          git config user.name  "master-snapshot-bot"
+          git config user.email "master-snapshot-bot@users.noreply.github.com"
+
           git fetch origin main
-          git rebase origin/main || true
-          git push origin HEAD:main
+          git merge --strategy-option ours origin/main || true
+
+          git add public/api/master || true
+          git add public/api/*/latest/index.json || true
+          git add public/api/*/latest/master_snapshot.* || true
+
+          git commit -m "master: snapshot ${{ steps.r.outputs.ts }} ${{ steps.r.outputs.sha }} [skip ci]" || echo "Nothing to commit"
+          git pull --rebase origin main || true
+          git push origin HEAD:main || echo "push skipped (concurrent update)"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
-        with: { path: public }
+        with:
+          path: public
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
