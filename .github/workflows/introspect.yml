@@ -1,11 +1,9 @@
-name: Introspect DB and Publish Inventory
+name: DB Introspect (REST RPC)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   workflow_dispatch:
-  schedule:
-    - cron: "0 3 * * *"   # oпц.: щодня о 03:00 UTC
 
 permissions:
   contents: write
@@ -13,124 +11,90 @@ permissions:
   id-token: write
 
 jobs:
-  introspect:
+  db_introspect:
     runs-on: ubuntu-latest
+    env:
+      PROFILE: ${{ secrets.INTROSPECT_PROFILE || 'introspect' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Mark repo as safe
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install jq & curl
+        run: sudo apt-get update -y && sudo apt-get install -y jq curl
 
-      - name: Install tooling
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq curl graphviz postgresql-client
-
-      - name: Setup Supabase CLI
-        uses: supabase/setup-cli@v1
-        with:
-          version: latest
-
-      # ---------- Dump schema via Supabase CLI ----------
-      - name: Dump DB schema via Supabase CLI
-        id: dump
-        shell: bash
+      - name: Fetch RPC JSON & publish
         env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_PROJECT_ID:   ${{ secrets.SUPABASE_PROJECT_ID }}
-          SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
+          URL: ${{ secrets.SUPABASE_URL }}
+          KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        shell: bash
         run: |
           set -euo pipefail
           TS="$(date -u +%Y%m%dT%H%M%SZ)"
-          SHA="$(git rev-parse --short HEAD)"
-          OUT="state/${TS}_${SHA}"
-          mkdir -p "${OUT}/db" "${OUT}/rpc" "${OUT}/rest"
-          echo "TS=${TS}"   >> "$GITHUB_ENV"
-          echo "SHA=${SHA}" >> "$GITHUB_ENV"
-          echo "OUT=${OUT}" >> "$GITHUB_ENV"
+          OUT_STATE="state/${TS}/db"
+          OUT_PUB="public/api/db"
+          mkdir -p "${OUT_STATE}" "${OUT_PUB}/latest" "${OUT_PUB}/snapshots/${TS}"
 
-          supabase login "$SUPABASE_ACCESS_TOKEN"
-          supabase link --project-ref "$SUPABASE_PROJECT_ID"
-          supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" -f "${OUT}/db/schema.sql"
+          hdr=(
+            -H "apikey: ${KEY}"
+            -H "Authorization: Bearer ${KEY}"
+            -H "Accept-Profile: ${PROFILE}"
+            -H "Content-Type: application/json"
+          )
 
-      # ---------- Fetch RPC JSON (tables/columns/pks/fks/indexes/views) ----------
-      - name: RPC – fetch tables/columns/pks/fks/indexes/views
-        shell: bash
-        env:
-          URL: ${{ secrets.SUPABASE_URL }}
-          KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: |
-          set -euo pipefail
-          INV="${OUT}/rpc"
-          mkdir -p "$INV"
-          hdr=(-H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" \
-               -H "Accept-Profile: introspect" -H "Content-Type: application/json")
-          echo "Fetching tables..."
-          curl -sS "${URL}/rest/v1/rpc/tables"   "${hdr[@]}" --data '{}' > "${INV}/tables.json"
-          echo "Fetching columns..."
-          curl -sS "${URL}/rest/v1/rpc/columns"  "${hdr[@]}" --data '{}' > "${INV}/columns.json"
-          echo "Fetching pks..."
-          curl -sS "${URL}/rest/v1/rpc/pks"      "${hdr[@]}" --data '{}' > "${INV}/pks.json"
-          echo "Fetching fks..."
-          curl -sS "${URL}/rest/v1/rpc/fks"      "${hdr[@]}" --data '{}' > "${INV}/fks.json"
-          echo "Fetching indexes..."
-          curl -sS "${URL}/rest/v1/rpc/indexes"  "${hdr[@]}" --data '{}' > "${INV}/indexes.json"
-          echo "Fetching views..."
-          curl -sS "${URL}/rest/v1/rpc/views"    "${hdr[@]}" --data '{}' > "${INV}/views.json"
+          fetch() {
+            local ep="$1" file="$2"
+            if curl -fsS "${hdr[@]}" "${URL}/rest/v1/rpc/${ep}" -d '{}' -o "${OUT_STATE}/${file}.raw"; then
+              if jq -e 'type=="array"' "${OUT_STATE}/${file}.raw" >/dev/null; then
+                mv "${OUT_STATE}/${file}.raw" "${OUT_STATE}/${file}.json"
+              else
+                jq -c 'if type=="object" then [.] else . end' "${OUT_STATE}/${file}.raw" > "${OUT_STATE}/${file}.json"
+                rm -f "${OUT_STATE}/${file}.raw"
+              fi
+            else
+              echo "[]" > "${OUT_STATE}/${file}.json"
+            fi
+          }
 
-          # summary.json з підрахунками (щоб я могла відповідати на твої питання без здогадок)
+          # core set
+          fetch tables   tables
+          fetch columns  columns
+          fetch pks      pks
+          fetch fks      fks
+          fetch indexes  indexes
+          fetch views    views
+
+          # quick summary
           jq -n \
-            --arg ts  "$TS" \
-            --arg sha "$SHA" \
-            --arg path "$OUT" \
-            --argjson tables  "$(jq 'length' "${INV}/tables.json")" \
-            --argjson views   "$(jq 'length' "${INV}/views.json")" \
-            --argjson columns "$(jq 'length' "${INV}/columns.json")" \
-            --argjson pks     "$(jq 'length' "${INV}/pks.json")" \
-            --argjson fks     "$(jq 'length' "${INV}/fks.json")" \
-            --argjson indexes "$(jq 'length' "${INV}/indexes.json")" \
-            '{
-               ts: $ts, sha: $sha, path: $path,
-               counts: { tables: $tables, views: $views, columns: $columns, pks: $pks, fks: $fks, indexes: $indexes }
-             }' > "${OUT}/summary.json"
+            --slurpfile t "${OUT_STATE}/tables.json" \
+            --slurpfile c "${OUT_STATE}/columns.json" \
+            --slurpfile p "${OUT_STATE}/pks.json" \
+            --slurpfile f "${OUT_STATE}/fks.json" \
+            --slurpfile i "${OUT_STATE}/indexes.json" \
+            --slurpfile v "${OUT_STATE}/views.json" \
+            '{tables:($t[0]|length),columns:($c[0]|length),pks:($p[0]|length),fks:($f[0]|length),indexes:($i[0]|length),views:($v[0]|length)}' \
+            > "${OUT_STATE}/summary.json"
 
-      # ---------- (optional) Export sample table data via REST (service_role) ----------
-      # приклад: витягти перші n рядків з будь-якої таблиці
-      - name: Export table data via REST (service_role) [optional]
-        if: ${{ false }}   # увімкнеш, коли знадобиться
-        shell: bash
-        env:
-          URL: ${{ secrets.SUPABASE_URL }}
-          KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: |
-          set -euo pipefail
-          TBL="public.projects"
-          curl -sS "${URL}/rest/v1/${TBL}?select=*&limit=100" \
-            -H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" \
-            -o "${OUT}/rest/${TBL//\./_}.json"
+          # publish snapshot + latest
+          rsync -a "${OUT_STATE}/" "${OUT_PUB}/snapshots/${TS}/"
+          rm -rf "${OUT_PUB}/latest" && mkdir -p "${OUT_PUB}/latest"
+          rsync -a "${OUT_PUB}/snapshots/${TS}/" "${OUT_PUB}/latest/"
 
-      # ---------- Commit & Push ----------
-      - name: Commit & Push results
+      - name: Commit & Push
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name  "introspect-bot"
-          git config user.email "introspect-bot@users.noreply.github.com"
-          git add "${OUT}"
-          # на випадок гонки — підтягнемо і ребейзнемось
-          git pull --rebase --autostash || true
-          git commit -m "introspect: snapshot ${TS} ${SHA} [skip ci]" || echo "Nothing to commit"
-          git push || echo "Nothing to push"
+          git config user.name  "db-introspect-bot"
+          git config user.email "db-introspect-bot@users.noreply.github.com"
+          git add public/api/db state/*/db
+          git commit -m "db-introspect: db snapshot [skip ci]" || echo "Nothing to commit"
+          git fetch origin main
+          git rebase origin/main || true
+          git push origin HEAD:main
 
-      # ---------- Upload artifact ----------
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
-        with:
-          path: ${{ env.OUT }}
+        with: { path: public }
 
-      # ---------- Deploy to GitHub Pages ----------
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
