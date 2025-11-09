@@ -1,0 +1,11 @@
+name: Cleanup Repo
+on: [workflow_dispatch]
+jobs:
+  wipe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete all files
+        run: |
+          git rm -rf .
+          git commit -m "🔥 wipe repo"
+          git push origin main
