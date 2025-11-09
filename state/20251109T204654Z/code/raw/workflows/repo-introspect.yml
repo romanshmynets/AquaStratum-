@@ -1,0 +1,94 @@
+name: Repo Introspect (Code + Sources)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  repo_introspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq cloc tree zip
+
+      - name: Build code inventory + raw sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          TS="$(date -u +%Y%m%dT%H%M%SZ)"
+          OUT_STATE="state/${TS}/code"
+          OUT_PUB="public/api/code"
+          mkdir -p "${OUT_STATE}" "${OUT_PUB}/latest" "${OUT_PUB}/snapshots/${TS}"
+
+          # tree (human view)
+          (tree -a -I ".git|node_modules|.next|dist|build" > "${OUT_STATE}/tree.txt") || true
+
+          # inventory: path + size + sha1
+          find . -type f -not -path "./.git/*" -print0 \
+            | xargs -0 -I{} bash -lc '
+                p="{}"; s=$(stat -c%s "{}" 2>/dev/null || echo 0);
+                h=$(sha1sum "{}" | awk "{print \$1}");
+                printf "{\"path\":\"%s\",\"bytes\":%s,\"sha1\":\"%s\"}\n" "${p#./}" "$s" "$h"
+              ' \
+            | jq -s '.' > "${OUT_STATE}/inventory.json"
+
+          # cloc
+          cloc --json --quiet --exclude-dir=.git,node_modules,.next,dist,build . > "${OUT_STATE}/cloc.json" || echo '{}' > "${OUT_STATE}/cloc.json"
+
+          # sbom (lightweight: enumerate actions and files; optionally replace with syft if needed)
+          jq -n \
+            --arg ts "$TS" \
+            --argjson files "$(jq '. | length' "${OUT_STATE}/inventory.json")" \
+            '{timestamp:$ts, components:{repo_files:$files}, notes:"Replace with Syft/CycloneDX if required"}' \
+            > "${OUT_STATE}/sbom.json"
+
+          # summary
+          FILES=$(jq 'length' "${OUT_STATE}/inventory.json")
+          BYTES=$(jq '[ .[].bytes ] | add' "${OUT_STATE}/inventory.json")
+          jq -n --arg ts "$TS" --argjson files "$FILES" --argjson bytes "$BYTES" \
+            '{ts:$ts, files:$files, bytes:$bytes}' > "${OUT_STATE}/summary.json"
+
+          # RAW mirror: only important dirs
+          mkdir -p "${OUT_STATE}/raw"
+          cp -r .github/workflows "${OUT_STATE}/raw"/ 2>/dev/null || true
+          cp -r scripts "${OUT_STATE}/raw"/ 2>/dev/null || true
+          cp -r supabase "${OUT_STATE}/raw"/ 2>/dev/null || true
+          [ -f schema.sql ] && cp schema.sql "${OUT_STATE}/raw/" || true
+          [ -f seed.sql ] && cp seed.sql "${OUT_STATE}/raw/" || true
+          (cd "${OUT_STATE}" && zip -r "source.zip" "raw" >/dev/null)
+
+          # publish snapshot + atomically update latest
+          rsync -a "${OUT_STATE}/" "public/api/code/snapshots/${TS}/"
+          rm -rf "${OUT_PUB}/latest" && mkdir -p "${OUT_PUB}/latest"
+          rsync -a "public/api/code/snapshots/${TS}/" "${OUT_PUB}/latest/"
+
+      - name: Commit & Push artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name  "repo-introspect-bot"
+          git config user.email "repo-introspect-bot@users.noreply.github.com"
+          git add public/api/code state/*/code
+          git commit -m "repo-introspect: code snapshot [skip ci]" || echo "Nothing to commit"
+          git fetch origin main
+          git rebase origin/main || true
+          git push origin HEAD:main
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with: { path: public }
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
