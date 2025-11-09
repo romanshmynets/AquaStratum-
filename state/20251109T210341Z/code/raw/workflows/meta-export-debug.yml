@@ -1,0 +1,20 @@
+name: Meta Export Debug
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - name: Test DB connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "🔍 Checking DATABASE_URL format..."
+          echo "${DATABASE_URL}" | sed 's/:.*@/:****@/'   # маскує пароль
+          echo
+          echo "🔗 Trying psql connection..."
+          psql "$DATABASE_URL" -c "select version();" || (echo "❌ Connection failed" && exit 2)
