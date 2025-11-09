@@ -1,0 +1,146 @@
+name: Build Master Snapshot
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build_master_snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq zip
+
+      - name: Resolve meta
+        id: r
+        shell: bash
+        run: |
+          set -euo pipefail
+          TS="$(date -u +%Y%m%dT%H%M%SZ)"
+          SHA="$(git rev-parse --short HEAD || echo no-git)"
+          echo "ts=$TS" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare output
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="public/api/master/${{ steps.r.outputs.ts }}_${{ steps.r.outputs.sha }}"
+          LATEST="public/api/master/latest"
+          mkdir -p "$OUT" "$LATEST"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          echo "LATEST=$LATEST" >> "$GITHUB_ENV"
+
+      - name: Build master_snapshot.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          CODE="public/api/code/latest"
+          DB="public/api/db/latest"
+          META="public/api/meta/latest"
+
+          safe_obj(){ [ -f "$1" ] && jq -c 'if type=="object" then . else {} end' "$1" || echo "{}"; }
+          safe_arr(){ [ -f "$1" ] && jq -c 'if type=="array" then . else [.] end' "$1" || echo "[]"; }
+          safe_txt(){ [ -f "$1" ] && jq -Rn --slurp --arg t "$(cat "$1")" '$t' || echo "\"\""; }
+
+          CODE_SUMMARY=$(safe_obj "$CODE/summary.json")
+          CODE_INVENTORY=$(safe_arr "$CODE/inventory.json")
+          CODE_CLOC=$(safe_obj "$CODE/cloc.json")
+          CODE_SBOM=$(safe_obj "$CODE/sbom.json")
+          CODE_TREE=$(safe_txt "$CODE/tree.txt")
+
+          DB_TABLES=$(safe_arr "$DB/tables.json")
+          DB_COLUMNS=$(safe_arr "$DB/columns.json")
+          DB_PKS=$(safe_arr "$DB/pks.json")
+          DB_FKS=$(safe_arr "$DB/fks.json")
+          DB_INDEXES=$(safe_arr "$DB/indexes.json")
+          DB_VIEWS=$(safe_arr "$DB/views.json")
+
+          META_RLS=$(safe_arr "$META/rls_policies.json")
+          META_DICT=$(safe_obj "$META/dictionary.json")
+
+          jq -n \
+            --arg ts "${{ steps.r.outputs.ts }}" \
+            --arg sha "${{ steps.r.outputs.sha }}" \
+            --arg code_path "$CODE" \
+            --arg db_path "$DB" \
+            --arg meta_path "$META" \
+            --argjson code_summary "$CODE_SUMMARY" \
+            --argjson code_inventory "$CODE_INVENTORY" \
+            --argjson code_cloc "$CODE_CLOC" \
+            --argjson code_sbom "$CODE_SBOM" \
+            --arg code_tree "$CODE_TREE" \
+            --argjson db_tables "$DB_TABLES" \
+            --argjson db_columns "$DB_COLUMNS" \
+            --argjson db_pks "$DB_PKS" \
+            --argjson db_fks "$DB_FKS" \
+            --argjson db_indexes "$DB_INDEXES" \
+            --argjson db_views "$DB_VIEWS" \
+            --argjson meta_rls "$META_RLS" \
+            --argjson meta_dict "$META_DICT" \
+            '{
+              snapshot:{ts:$ts, sha:$sha},
+              sources:{ code:$code_path, db:$db_path, meta:$meta_path },
+              code:{ summary:$code_summary, inventory:$code_inventory, cloc:$code_cloc, sbom:$code_sbom, tree_text:($code_tree|fromjson?//"") },
+              db:{ tables:$db_tables, columns:$db_columns, pks:$db_pks, fks:$db_fks, indexes:$db_indexes, views:$db_views },
+              meta:{ rls_policies:$meta_rls, data_dictionary:$meta_dict }
+            }' > "${OUT}/master_snapshot.json"
+
+      - name: Build master_snapshot.zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          mkdir -p "$TMP/code" "$TMP/db" "$TMP/meta"
+          cp -r public/api/code/latest/*  "$TMP/code/"  2>/dev/null || true
+          cp -r public/api/db/latest/*    "$TMP/db/"    2>/dev/null || true
+          cp -r public/api/meta/latest/*  "$TMP/meta/"  2>/dev/null || true
+          (cd "$TMP" && zip -r "../master_snapshot.zip" . >/dev/null)
+          mv "$(dirname "$TMP")/master_snapshot.zip" "${OUT}/master_snapshot.zip"
+          rm -rf "$TMP"
+
+      - name: Update latest alias + index
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="${OUT:?}"; LATEST="${LATEST:?}"
+          rm -rf "$LATEST" && mkdir -p "$LATEST"
+          rsync -a "$OUT/" "$LATEST/"
+          jq -n \
+            --arg out "$OUT" \
+            --arg latest "$LATEST" \
+            '{
+              latest:{json:($latest+"/master_snapshot.json"), zip:($latest+"/master_snapshot.zip")},
+              snapshot:{json:($out+"/master_snapshot.json"), zip:($out+"/master_snapshot.zip")}
+            }' > "public/api/master/index.json"
+
+      - name: Commit & Push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name  "build-master-bot"
+          git config user.email "build-master-bot@users.noreply.github.com"
+          git add public/api/master/**
+          git commit -m "build: master snapshot ${{ steps.r.outputs.ts }} (${{ steps.r.outputs.sha }}) [skip ci]" || echo "Nothing to commit"
+          git fetch origin main
+          git rebase origin/main || true
+          git push origin HEAD:main
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with: { path: public }
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
