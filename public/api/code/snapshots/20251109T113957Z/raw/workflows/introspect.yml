@@ -1,0 +1,136 @@
+name: Introspect DB and Publish Inventory
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"   # oпц.: щодня о 03:00 UTC
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  introspect:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Mark repo as safe
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl graphviz postgresql-client
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # ---------- Dump schema via Supabase CLI ----------
+      - name: Dump DB schema via Supabase CLI
+        id: dump
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_ID:   ${{ secrets.SUPABASE_PROJECT_ID }}
+          SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          TS="$(date -u +%Y%m%dT%H%M%SZ)"
+          SHA="$(git rev-parse --short HEAD)"
+          OUT="state/${TS}_${SHA}"
+          mkdir -p "${OUT}/db" "${OUT}/rpc" "${OUT}/rest"
+          echo "TS=${TS}"   >> "$GITHUB_ENV"
+          echo "SHA=${SHA}" >> "$GITHUB_ENV"
+          echo "OUT=${OUT}" >> "$GITHUB_ENV"
+
+          supabase login "$SUPABASE_ACCESS_TOKEN"
+          supabase link --project-ref "$SUPABASE_PROJECT_ID"
+          supabase db dump --linked -p "$SUPABASE_DB_PASSWORD" -f "${OUT}/db/schema.sql"
+
+      # ---------- Fetch RPC JSON (tables/columns/pks/fks/indexes/views) ----------
+      - name: RPC – fetch tables/columns/pks/fks/indexes/views
+        shell: bash
+        env:
+          URL: ${{ secrets.SUPABASE_URL }}
+          KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          INV="${OUT}/rpc"
+          mkdir -p "$INV"
+          hdr=(-H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" \
+               -H "Accept-Profile: introspect" -H "Content-Type: application/json")
+          echo "Fetching tables..."
+          curl -sS "${URL}/rest/v1/rpc/tables"   "${hdr[@]}" --data '{}' > "${INV}/tables.json"
+          echo "Fetching columns..."
+          curl -sS "${URL}/rest/v1/rpc/columns"  "${hdr[@]}" --data '{}' > "${INV}/columns.json"
+          echo "Fetching pks..."
+          curl -sS "${URL}/rest/v1/rpc/pks"      "${hdr[@]}" --data '{}' > "${INV}/pks.json"
+          echo "Fetching fks..."
+          curl -sS "${URL}/rest/v1/rpc/fks"      "${hdr[@]}" --data '{}' > "${INV}/fks.json"
+          echo "Fetching indexes..."
+          curl -sS "${URL}/rest/v1/rpc/indexes"  "${hdr[@]}" --data '{}' > "${INV}/indexes.json"
+          echo "Fetching views..."
+          curl -sS "${URL}/rest/v1/rpc/views"    "${hdr[@]}" --data '{}' > "${INV}/views.json"
+
+          # summary.json з підрахунками (щоб я могла відповідати на твої питання без здогадок)
+          jq -n \
+            --arg ts  "$TS" \
+            --arg sha "$SHA" \
+            --arg path "$OUT" \
+            --argjson tables  "$(jq 'length' "${INV}/tables.json")" \
+            --argjson views   "$(jq 'length' "${INV}/views.json")" \
+            --argjson columns "$(jq 'length' "${INV}/columns.json")" \
+            --argjson pks     "$(jq 'length' "${INV}/pks.json")" \
+            --argjson fks     "$(jq 'length' "${INV}/fks.json")" \
+            --argjson indexes "$(jq 'length' "${INV}/indexes.json")" \
+            '{
+               ts: $ts, sha: $sha, path: $path,
+               counts: { tables: $tables, views: $views, columns: $columns, pks: $pks, fks: $fks, indexes: $indexes }
+             }' > "${OUT}/summary.json"
+
+      # ---------- (optional) Export sample table data via REST (service_role) ----------
+      # приклад: витягти перші n рядків з будь-якої таблиці
+      - name: Export table data via REST (service_role) [optional]
+        if: ${{ false }}   # увімкнеш, коли знадобиться
+        shell: bash
+        env:
+          URL: ${{ secrets.SUPABASE_URL }}
+          KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          TBL="public.projects"
+          curl -sS "${URL}/rest/v1/${TBL}?select=*&limit=100" \
+            -H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" \
+            -o "${OUT}/rest/${TBL//\./_}.json"
+
+      # ---------- Commit & Push ----------
+      - name: Commit & Push results
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name  "introspect-bot"
+          git config user.email "introspect-bot@users.noreply.github.com"
+          git add "${OUT}"
+          # на випадок гонки — підтягнемо і ребейзнемось
+          git pull --rebase --autostash || true
+          git commit -m "introspect: snapshot ${TS} ${SHA} [skip ci]" || echo "Nothing to commit"
+          git push || echo "Nothing to push"
+
+      # ---------- Upload artifact ----------
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ env.OUT }}
+
+      # ---------- Deploy to GitHub Pages ----------
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
